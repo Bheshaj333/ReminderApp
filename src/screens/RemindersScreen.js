@@ -27,16 +27,19 @@ const MODE_COLORS = {
 
 const defaultForm = () => ({
   text: '',
-  repeatType: 'custom', // once | daily | custom
-  repeatInterval: 30,
+  repeatType: 'daily', // once | daily | weekend | custom
+  repeatInterval: 1, 
+  repeatUnit: 'hours', // minutes | hours | days
+  repeatCount: 1, 
+  burstInterval: 1, 
   mode: 'Focus',
   escalation: true,
   untilDone: true,
-  scheduledTime: null,
+  scheduledTime: Date.now(),
   active: true,
 });
 
-export default function RemindersScreen() {
+export default function RemindersScreen({ navigation }) {
   const { state, addReminder, updateReminder, deleteReminder, toggleReminder } = useApp();
   const { reminders } = state;
 
@@ -44,6 +47,7 @@ export default function RemindersScreen() {
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(defaultForm());
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [fsReminder, setFsReminder] = useState(null);
 
   const fabScale = useSharedValue(1);
@@ -60,12 +64,15 @@ export default function RemindersScreen() {
     setEditId(reminder.id);
     setForm({
       text: reminder.text,
-      repeatType: reminder.repeatType || 'custom',
-      repeatInterval: reminder.repeatInterval || 30,
+      repeatType: reminder.repeatType || 'daily',
+      repeatInterval: reminder.repeatInterval || 1,
+      repeatUnit: reminder.repeatUnit || 'hours',
+      repeatCount: reminder.repeatCount || 1,
+      burstInterval: reminder.burstInterval || 1,
       mode: reminder.mode || 'Focus',
       escalation: reminder.escalation ?? true,
       untilDone: reminder.untilDone ?? true,
-      scheduledTime: reminder.scheduledTime || null,
+      scheduledTime: reminder.scheduledTime || Date.now(),
       active: reminder.active,
     });
     setShowModal(true);
@@ -80,6 +87,15 @@ export default function RemindersScreen() {
       await addReminder({ id: uuid.v4(), ...form, createdAt: Date.now() });
     }
     setShowModal(false);
+
+    // Close the screen after saving
+    setTimeout(() => {
+      if (navigation && navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation?.navigate('Home');
+      }
+    }, 100);
   };
 
   const handleDelete = async (id) => {
@@ -185,52 +201,108 @@ export default function RemindersScreen() {
             />
 
             {/* Repeat Type */}
-            <Text style={styles.fieldLabel}>Repeat</Text>
+            <Text style={styles.fieldLabel}>Repeat Type</Text>
             <View style={styles.segRow}>
-              {['once', 'daily', 'custom'].map(type => (
+              {['once', 'daily', 'weekend', 'custom'].map(type => (
                 <Pressable
                   key={type}
-                  onPress={() => { setForm(f => ({ ...f, repeatType: type })); Haptics.selectionAsync(); }}
+                  onPress={() => { 
+                    setForm(f => ({ ...f, repeatType: type, scheduledTime: f.scheduledTime || Date.now() })); 
+                    Haptics.selectionAsync(); 
+                  }}
                   style={[styles.seg, form.repeatType === type && styles.segActive]}
                 >
                   <Text style={[styles.segText, form.repeatType === type && styles.segTextActive]}>
-                    {type === 'custom' ? 'Interval' : type.charAt(0).toUpperCase() + type.slice(1)}
+                    {type.charAt(0).toUpperCase() + type.slice(1)}
                   </Text>
                 </Pressable>
               ))}
             </View>
 
+            {/* Date/Time Picker Trigger */}
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+               <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Start Time</Text>
+                  <Pressable style={styles.timeBtn} onPress={() => setShowTimePicker(true)}>
+                    <Feather name="clock" size={14} color={Colors.mid} />
+                    <Text style={styles.timeBtnText}>
+                      {form.scheduledTime
+                        ? new Date(form.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : 'Set time'}
+                    </Text>
+                  </Pressable>
+               </View>
+               {(form.repeatType === 'once' || form.repeatType === 'custom') && (
+                 <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Date</Text>
+                    <Pressable style={styles.timeBtn} onPress={() => setShowDatePicker(true)}>
+                      <Feather name="calendar" size={14} color={Colors.mid} />
+                      <Text style={styles.timeBtnText}>
+                        {form.scheduledTime
+                          ? new Date(form.scheduledTime).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                          : 'Set date'}
+                      </Text>
+                    </Pressable>
+                 </View>
+               )}
+            </View>
+
+            {/* Custom Interval & Unit */}
             {form.repeatType === 'custom' && (
-              <Animated.View entering={FadeIn.duration(200)} style={styles.intervalRow}>
-                <Text style={styles.fieldLabel}>Every</Text>
-                <View style={styles.intervalControl}>
-                  <Pressable onPress={() => setForm(f => ({ ...f, repeatInterval: Math.max(5, f.repeatInterval - 5) }))} style={styles.stepBtn}>
-                    <Feather name="minus" size={16} color={Colors.mid} />
-                  </Pressable>
-                  <Text style={styles.intervalVal}>{form.repeatInterval}m</Text>
-                  <Pressable onPress={() => setForm(f => ({ ...f, repeatInterval: Math.min(120, f.repeatInterval + 5) }))} style={styles.stepBtn}>
-                    <Feather name="plus" size={16} color={Colors.mid} />
-                  </Pressable>
+              <View style={{ marginBottom: 16 }}>
+                <Text style={styles.fieldLabel}>Every...</Text>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <View style={[styles.intervalControl, { flex: 1, height: 44, paddingHorizontal: 12, backgroundColor: Colors.sea, borderRadius: Radii.md, borderWidth: 0.5, borderColor: Colors.border }]}>
+                    <Pressable onPress={() => setForm(f => ({ ...f, repeatInterval: Math.max(1, f.repeatInterval - 1) }))}>
+                      <Feather name="minus" size={16} color={Colors.mid} />
+                    </Pressable>
+                    <Text style={styles.intervalVal}>{form.repeatInterval}</Text>
+                    <Pressable onPress={() => setForm(f => ({ ...f, repeatInterval: f.repeatInterval + 1 }))}>
+                      <Feather name="plus" size={16} color={Colors.mid} />
+                    </Pressable>
+                  </View>
+                  <View style={{ flexDirection: 'row', flex: 2, gap: 4 }}>
+                    {['minutes', 'hours', 'days'].map(u => (
+                      <Pressable
+                        key={u}
+                        onPress={() => setForm(f => ({ ...f, repeatUnit: u }))}
+                        style={[styles.seg, { flex: 1 }, form.repeatUnit === u && styles.segActive]}
+                      >
+                        <Text style={[styles.segText, { fontSize: 11 }, form.repeatUnit === u && styles.segTextActive]}>{u}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
                 </View>
-              </Animated.View>
+              </View>
             )}
 
-            {form.repeatType === 'once' && (
-              <Animated.View entering={FadeIn.duration(200)}>
-                <Text style={styles.fieldLabel}>Time</Text>
-                <Pressable
-                  style={styles.timeBtn}
-                  onPress={() => setShowTimePicker(true)}
-                >
-                  <Feather name="clock" size={14} color={Colors.mid} />
-                  <Text style={styles.timeBtnText}>
-                    {form.scheduledTime
-                      ? new Date(form.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                      : 'Set time'}
-                  </Text>
-                </Pressable>
-              </Animated.View>
-            )}
+            {/* Burst Settings */}
+            <View style={{ flexDirection: 'row', gap: 16, marginBottom: 16 }}>
+               <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Repeat Count</Text>
+                  <View style={styles.intervalControl}>
+                    <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.max(1, f.repeatCount - 1) }))} style={styles.stepBtn}>
+                      <Feather name="minus" size={14} color={Colors.mid} />
+                    </Pressable>
+                    <Text style={styles.intervalVal}>{form.repeatCount}x</Text>
+                    <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.min(10, f.repeatCount + 1) }))} style={styles.stepBtn}>
+                      <Feather name="plus" size={14} color={Colors.mid} />
+                    </Pressable>
+                  </View>
+               </View>
+               <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Burst (Mins)</Text>
+                  <View style={styles.intervalControl}>
+                    <Pressable onPress={() => setForm(f => ({ ...f, burstInterval: Math.max(1, f.burstInterval - 1) }))} style={styles.stepBtn}>
+                      <Feather name="minus" size={14} color={Colors.mid} />
+                    </Pressable>
+                    <Text style={styles.intervalVal}>{form.burstInterval}m</Text>
+                    <Pressable onPress={() => setForm(f => ({ ...f, burstInterval: Math.min(60, f.burstInterval + 1) }))} style={styles.stepBtn}>
+                      <Feather name="plus" size={14} color={Colors.mid} />
+                    </Pressable>
+                  </View>
+               </View>
+            </View>
 
             {/* Mode */}
             <Text style={styles.fieldLabel}>Mode</Text>
@@ -295,10 +367,33 @@ export default function RemindersScreen() {
         <DateTimePicker
           value={form.scheduledTime ? new Date(form.scheduledTime) : new Date()}
           mode="time"
-          display="spinner"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           onChange={(e, date) => {
             setShowTimePicker(false);
-            if (date) setForm(f => ({ ...f, scheduledTime: date.getTime() }));
+            if (date) {
+               const newDate = new Date(form.scheduledTime || Date.now());
+               newDate.setHours(date.getHours());
+               newDate.setMinutes(date.getMinutes());
+               setForm(f => ({ ...f, scheduledTime: newDate.getTime() }));
+            }
+          }}
+        />
+      )}
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={form.scheduledTime ? new Date(form.scheduledTime) : new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(e, date) => {
+            setShowDatePicker(false);
+            if (date) {
+               const newDate = new Date(form.scheduledTime || Date.now());
+               newDate.setFullYear(date.getFullYear());
+               newDate.setMonth(date.getMonth());
+               newDate.setDate(date.getDate());
+               setForm(f => ({ ...f, scheduledTime: newDate.getTime() }));
+            }
           }}
         />
       )}
@@ -340,8 +435,8 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(42,56,48,0.3)' },
   modalWrap: { justifyContent: 'flex-end' },
   sheet: {
-    backgroundColor: Colors.white, borderTopLeftRadius: Radii.xxl,
-    borderTopRightRadius: Radii.xxl, padding: 24, paddingBottom: 40,
+    backgroundColor: Colors.white, borderTopLeftRadius: Radii.xl,
+    borderTopRightRadius: Radii.xl, padding: 24, paddingBottom: 40,
     ...Shadows.lg,
   },
   sheetHandle: {
@@ -375,7 +470,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.sea, borderWidth: 0.5, borderColor: Colors.border,
     alignItems: 'center', justifyContent: 'center',
   },
-  intervalVal: { fontSize: 18, fontWeight: '500', color: Colors.ink, minWidth: 44, textAlign: 'center' },
+  intervalVal: { fontSize: 16, fontWeight: '500', color: Colors.ink, minWidth: 36, textAlign: 'center' },
   timeBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: Colors.sea, borderRadius: Radii.md, padding: 12,

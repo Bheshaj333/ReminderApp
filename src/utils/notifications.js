@@ -7,58 +7,140 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
+    priority: Notifications.AndroidImportance.MAX,
   }),
 });
 
 export async function requestPermissions() {
   if (!Device.isDevice) return false;
   const { status: existing } = await Notifications.getPermissionsAsync();
-  if (existing === 'granted') return true;
-  const { status } = await Notifications.requestPermissionsAsync();
-  if (status !== 'granted') return false;
+  
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('reminders', {
       name: 'Reminders',
       importance: Notifications.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#78BDAF',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd: true,
+      showBadge: true,
     });
   }
-  return true;
+
+  if (existing === 'granted') return true;
+  const { status } = await Notifications.requestPermissionsAsync();
+  return status === 'granted';
 }
 
 export async function scheduleReminder(reminder) {
-  const { id, text, scheduledTime, repeatInterval, escalationEnabled } = reminder;
+  const { id, text, scheduledTime, repeatType, repeatInterval, repeatUnit, escalationEnabled, repeatCount, burstInterval } = reminder;
+  const count = repeatCount || 1;
+  const burst = burstInterval || 1; // minutes
 
   // Cancel existing
   await cancelReminder(id);
 
-  const trigger = scheduledTime
-    ? { date: new Date(scheduledTime) }
-    : repeatInterval
-    ? { seconds: repeatInterval * 60, repeats: true }
-    : null;
+  const scheduleOne = async (identifier, trigger, index) => {
+    return await Notifications.scheduleNotificationAsync({
+      identifier,
+      content: {
+        title: 'interrupt',
+        body: text,
+        data: { reminderId: id, escalation: escalationEnabled, burstIndex: index },
+        sound: true,
+        categoryIdentifier: 'reminder',
+        priority: Notifications.AndroidImportance.MAX,
+      },
+      trigger,
+    });
+  };
 
-  if (!trigger) return null;
+  if (repeatType === 'once' && scheduledTime) {
+    let lastId = null;
+    for (let i = 0; i < count; i++) {
+      const time = scheduledTime + (i * burst * 60 * 1000);
+      if (time < Date.now()) continue;
+      lastId = await scheduleOne(`${id}_${i}`, { date: new Date(time) }, i);
+    }
+    return lastId;
+  }
 
-  const notifId = await Notifications.scheduleNotificationAsync({
-    identifier: id,
-    content: {
-      title: 'interrupt',
-      body: text,
-      data: { reminderId: id, escalation: escalationEnabled },
-      sound: true,
-      categoryIdentifier: 'reminder',
-    },
-    trigger,
-  });
+  if (repeatType === 'daily' && scheduledTime) {
+    const baseDate = new Date(scheduledTime);
+    let lastId = null;
+    for (let i = 0; i < count; i++) {
+      const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
+      lastId = await scheduleOne(`${id}_${i}`, {
+        hour: time.getHours(),
+        minute: time.getMinutes(),
+        repeats: true,
+      }, i);
+    }
+    return lastId;
+  }
 
-  return notifId;
+  if (repeatType === 'weekend' && scheduledTime) {
+    const baseDate = new Date(scheduledTime);
+    let lastId = null;
+    for (let i = 0; i < count; i++) {
+      const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
+      // Schedule for Saturday (7)
+      await scheduleOne(`${id}_sat_${i}`, { 
+        weekday: 7, 
+        hour: time.getHours(), 
+        minute: time.getMinutes(), 
+        repeats: true 
+      }, i);
+      // Schedule for Sunday (1)
+      lastId = await scheduleOne(`${id}_sun_${i}`, { 
+        weekday: 1, 
+        hour: time.getHours(), 
+        minute: time.getMinutes(), 
+        repeats: true 
+      }, i);
+    }
+    return lastId;
+  }
+
+  if (repeatType === 'custom' && repeatInterval && scheduledTime) {
+    let intervalSeconds = repeatInterval;
+    if (repeatUnit === 'minutes') intervalSeconds *= 60;
+    else if (repeatUnit === 'days') intervalSeconds *= 86400;
+    else intervalSeconds *= 3600; // default hours
+
+    let lastId = null;
+    const now = Date.now();
+    // Schedule up to 20 occurrences to cover a decent amount of time
+    for (let i = 0; i < 20; i++) {
+      const baseTime = scheduledTime + (i * intervalSeconds * 1000);
+      for (let j = 0; j < count; j++) {
+        const time = baseTime + (j * burst * 60 * 1000);
+        if (time < now) continue;
+        lastId = await scheduleOne(`${id}_${i}_${j}`, { date: new Date(time) }, j);
+      }
+    }
+    return lastId;
+  }
+
+  return null;
 }
 
 export async function cancelReminder(id) {
   try {
+    // Cancel all potential notifications (bursts and intervals)
+    for (let i = 0; i < 20; i++) {
+      for (let j = 0; j < 10; j++) {
+        await Notifications.cancelScheduledNotificationAsync(`${id}_${i}_${j}`);
+      }
+      await Notifications.cancelScheduledNotificationAsync(`${id}_${i}`);
+      await Notifications.cancelScheduledNotificationAsync(`${id}_sat_${i}`);
+      await Notifications.cancelScheduledNotificationAsync(`${id}_sun_${i}`);
+      await Notifications.cancelScheduledNotificationAsync(`${id}_snooze_${i}`);
+    }
+    // Backward compatibility
     await Notifications.cancelScheduledNotificationAsync(id);
+    await Notifications.cancelScheduledNotificationAsync(`${id}_sat`);
+    await Notifications.cancelScheduledNotificationAsync(`${id}_sun`);
   } catch (_) {}
 }
 

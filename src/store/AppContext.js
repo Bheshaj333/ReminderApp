@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { loadReminders, saveReminders, loadSettings, saveSettings } from '../utils/storage';
-import { scheduleReminder, cancelReminder } from '../utils/notifications';
+import { scheduleReminder, cancelReminder, addNotificationReceivedListener, addNotificationResponseListener } from '../utils/notifications';
 
 const AppContext = createContext(null);
 
@@ -69,6 +69,33 @@ export function AppProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    const notifListener = addNotificationReceivedListener(notification => {
+      const { reminderId } = notification.request.content.data;
+      if (reminderId) {
+        const reminder = state.reminders.find(r => r.id === reminderId);
+        if (reminder) {
+          dispatch({ type: 'SET_ACTIVE_REMINDER', payload: reminder });
+        }
+      }
+    });
+
+    const responseListener = addNotificationResponseListener(response => {
+      const { reminderId } = response.notification.request.content.data;
+      if (reminderId) {
+        const reminder = state.reminders.find(r => r.id === reminderId);
+        if (reminder) {
+          dispatch({ type: 'SET_ACTIVE_REMINDER', payload: reminder });
+        }
+      }
+    });
+
+    return () => {
+      notifListener.remove();
+      responseListener.remove();
+    };
+  }, [state.reminders]);
+
+  useEffect(() => {
     if (!state.loading) {
       saveReminders(state.reminders);
     }
@@ -103,11 +130,36 @@ export function AppProvider({ children }) {
   const toggleReminder = async (id) => {
     const reminder = state.reminders.find(r => r.id === id);
     if (!reminder) return;
-    dispatch({ type: 'TOGGLE_REMINDER', payload: id });
-    if (reminder.active) {
-      await cancelReminder(id);
-    } else {
+    const newState = !reminder.active;
+    dispatch({ type: 'UPDATE_REMINDER', payload: { id, active: newState } });
+    if (newState) {
       await scheduleReminder({ ...reminder, active: true });
+    } else {
+      await cancelReminder(id);
+    }
+  };
+
+  const snoozeReminder = async (reminder) => {
+    dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
+    // Schedule a one-time reminder in 5 minutes
+    const snoozeTime = Date.now() + 5 * 60 * 1000;
+    await scheduleReminder({
+      ...reminder,
+      id: `${reminder.id}_snooze`,
+      repeatType: 'once',
+      scheduledTime: snoozeTime,
+    });
+  };
+
+  const ignoreReminder = async (reminder) => {
+    dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
+    // If it's a repeating reminder, it will trigger again anyway.
+    // But if we want it to trigger "as per defined interval" immediately after being ignored?
+    // Usually, ignore means "don't do anything, let the next scheduled one happen".
+    // But user said: "igonre will make it repeat again as per the defined interval"
+    // So we re-schedule it to trigger after its interval.
+    if (reminder.repeatInterval) {
+      await scheduleReminder(reminder);
     }
   };
 
@@ -116,7 +168,10 @@ export function AppProvider({ children }) {
   };
 
   return (
-    <AppContext.Provider value={{ state, addReminder, updateReminder, deleteReminder, toggleReminder, updateSettings, dispatch }}>
+    <AppContext.Provider value={{ 
+      state, addReminder, updateReminder, deleteReminder, 
+      toggleReminder, updateSettings, snoozeReminder, ignoreReminder, dispatch 
+    }}>
       {children}
     </AppContext.Provider>
   );

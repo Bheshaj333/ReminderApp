@@ -14,6 +14,8 @@ import RemindersScreen from '../screens/RemindersScreen';
 import FocusScreen from '../screens/FocusScreen';
 import VoiceScreen from '../screens/VoiceScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import FullscreenReminder from '../components/FullscreenReminder';
+import { useApp } from '../store/AppContext';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -90,15 +92,28 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
+  const { state, dispatch, snoozeReminder, ignoreReminder } = useApp();
+  const { activeReminder } = state;
+
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Main" component={MainTabs} />
-      <Stack.Screen
-        name="Settings"
-        component={SettingsScreen}
-        options={{ presentation: 'modal', gestureEnabled: true }}
+    <View style={{ flex: 1 }}>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Main" component={MainTabs} />
+        <Stack.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{ presentation: 'modal', gestureEnabled: true }}
+        />
+      </Stack.Navigator>
+
+      <FullscreenReminder
+        visible={!!activeReminder}
+        reminder={activeReminder}
+        onDone={() => dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null })}
+        onSnooze={() => snoozeReminder(activeReminder)}
+        onIgnore={() => ignoreReminder(activeReminder)}
       />
-    </Stack.Navigator>
+    </View>
   );
 }
 

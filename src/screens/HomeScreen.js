@@ -53,20 +53,19 @@ export default function HomeScreen({ navigation }) {
         }
         const key = phraseKeys[setIdx.current];
         const phrase = VOICE_PHRASES[key][phraseIdx.current];
-        'worklet'; // not actually worklet, just setting state via runOnJS would be needed but we'll do it simply
+        
+        // Use runOnJS to update state from the worklet scope if needed, 
+        // but here we are just triggering the fade back in
       });
+
       setTimeout(() => {
-        const nextIndex = (phraseIndex + 1) % ALL_PHRASES.length;
-        setIdx.current = (setIdx.current + (phraseIdx.current === 0 ? 1 : 0)) % phraseKeys.length;
-        phraseIdx.current = phraseIdx.current % VOICE_PHRASES[phraseKeys[setIdx.current]].length;
         const key = phraseKeys[setIdx.current];
         const phrase = VOICE_PHRASES[key][phraseIdx.current];
-        phraseIdx.current = (phraseIdx.current + 1) % VOICE_PHRASES[key].length;
         setCurrentPhrase(phrase);
         setPhraseSet(key);
         phraseOpacity.value = withTiming(1, { duration: 400 });
       }, 320);
-    }, 3500);
+    }, 5000); // Increased interval to 5s for better UX
     return () => clearInterval(interval);
   }, []);
 
@@ -82,10 +81,6 @@ export default function HomeScreen({ navigation }) {
     );
   }, []);
 
-  useEffect(() => {
-    speak(ALL_PHRASES[phraseIndex].text);
-  }, [phraseIndex]);
-  
   const phraseStyle = useAnimatedStyle(() => ({ opacity: phraseOpacity.value }));
   const liveStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: liveY.value }],

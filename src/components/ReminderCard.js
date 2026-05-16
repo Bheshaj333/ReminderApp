@@ -46,7 +46,7 @@ export default function ReminderCard({ reminder, onToggle, onDelete, onEdit, onT
   };
 
   const repeatText = reminder.repeatType === 'custom'
-    ? `Every ${reminder.repeatInterval}m`
+    ? `Every ${reminder.repeatInterval}h`
     : reminder.repeatType === 'daily'
     ? 'Daily'
     : 'Once';

@@ -10,6 +10,7 @@ import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Radii, Shadows } from '../utils/theme';
 import PressButton from './PressButton';
+import { speak, stopSpeech } from '../utils/speech';
 
 export default function FullscreenReminder({ visible, reminder, onDone, onSnooze, onIgnore }) {
   const scale = useSharedValue(0.85);
@@ -18,9 +19,13 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
   const [holdProgress, setHoldProgress] = useState(0);
   const holdInterval = useRef(null);
   const progressVal = useSharedValue(0);
+  const [remainingRepeats, setRemainingRepeats] = useState(0);
+  const isClosing = useRef(false);
+  const lastBurstIndex = useRef(-1);
 
   useEffect(() => {
     if (visible) {
+      isClosing.current = false;
       opacity.value = withTiming(1, { duration: 300 });
       scale.value = withSpring(1, { damping: 18, stiffness: 200 });
       emojiY.value = withRepeat(
@@ -31,15 +36,47 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
         -1,
         true
       );
-      // Progress bar animation
-      progressVal.value = withTiming(1, { duration: 8000 });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      
+      const count = reminder?.repeatCount || 1;
+      const burstIndex = reminder?.burstIndex ?? 0;
+      
+      setRemainingRepeats(count - burstIndex);
+      
+      if (burstIndex !== lastBurstIndex.current) {
+        lastBurstIndex.current = burstIndex;
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        speak(reminder?.text || 'Reminder', 'default');
+      }
+
+      // If it's the last burst, we might want to auto-dismiss after a while
+      if (burstIndex >= count - 1) {
+        setTimeout(() => {
+          if (visible && !isClosing.current) onDone?.();
+        }, 10000); // Give it some time
+      }
     } else {
       opacity.value = withTiming(0, { duration: 200 });
       scale.value = withTiming(0.9, { duration: 200 });
       progressVal.value = 0;
+      lastBurstIndex.current = -1;
+      stopSpeech();
     }
-  }, [visible]);
+  }, [visible, reminder?.id, reminder?.burstIndex]);
+
+  const handleSnooze = () => {
+     isClosing.current = true;
+     onSnooze?.();
+  };
+
+  const handleIgnore = () => {
+     isClosing.current = true;
+     onIgnore?.();
+  };
+
+  const handleDoneAction = () => {
+     isClosing.current = true;
+     onDone?.();
+  };
 
   const overlayStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const cardStyle = useAnimatedStyle(() => ({
@@ -61,7 +98,7 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
       if (progress >= 100) {
         clearInterval(holdInterval.current);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        onDone?.();
+        handleDoneAction();
         setHoldProgress(0);
       }
     }, 40);
@@ -92,6 +129,9 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
         <View style={styles.bg} />
 
         <Animated.View style={[styles.card, cardStyle, Shadows.lg]}>
+          <View style={styles.repeatBadge}>
+             <Text style={styles.repeatBadgeText}>{remainingRepeats} left</Text>
+          </View>
           <Animated.Text style={[styles.emoji, emojiStyle]}>{emoji}</Animated.Text>
 
           <Text style={styles.heading}>{reminder?.text || 'Time for a reminder.'}</Text>
@@ -106,7 +146,7 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
             >
               <View style={[styles.holdFill, { width: `${holdProgress}%` }]} />
               <Text style={styles.holdLabel}>
-                {holdProgress > 0 ? `${Math.round(holdProgress)}%` : 'Hold to dismiss'}
+                {holdProgress > 0 ? `${Math.round(holdProgress)}%` : 'Hold to shut down'}
               </Text>
             </Pressable>
           </View>
@@ -114,13 +154,13 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
           <View style={styles.actionRow}>
             <PressButton
               label="Snooze 5m"
-              onPress={onSnooze}
+              onPress={handleSnooze}
               variant="secondary"
               style={{ flex: 1 }}
             />
             <PressButton
               label="Ignore"
-              onPress={onIgnore}
+              onPress={handleIgnore}
               variant="ghost"
               style={{ flex: 1 }}
             />
@@ -156,6 +196,24 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: Colors.sea3,
     overflow: 'hidden',
+    position: 'relative',
+  },
+  repeatBadge: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    backgroundColor: Colors.sea,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radii.full,
+    borderWidth: 0.5,
+    borderColor: Colors.seafoam,
+  },
+  repeatBadgeText: {
+    fontSize: 10,
+    color: Colors.deep,
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   emoji: {
     fontSize: 64,

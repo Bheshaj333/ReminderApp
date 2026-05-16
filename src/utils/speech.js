@@ -1,12 +1,13 @@
 import * as Speech from 'expo-speech';
 
-export function speak(text, voiceStyle = 'default') {
+export function speak(text, voiceStyle = 'default', onDone = null) {
     Speech.stop();
 
     const options = {
         language: 'en-US',
         pitch: voiceStyle === 'firm' ? 0.8 : voiceStyle === 'gentle' ? 1.2 : 1.0,
         rate: voiceStyle === 'firm' ? 0.9 : voiceStyle === 'gentle' ? 0.85 : 0.9,
+        onDone: onDone,
     };
 
     Speech.speak(text, options);
