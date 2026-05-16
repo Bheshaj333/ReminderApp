@@ -54,6 +54,7 @@ export default function ReminderEditScreen({ navigation, route }) {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showUnitPicker, setShowUnitPicker] = useState(false);
+  const [intervalInput, setIntervalInput] = useState(String(form.repeatInterval));
 
   useEffect(() => {
     if (editReminder) {
@@ -62,6 +63,7 @@ export default function ReminderEditScreen({ navigation, route }) {
         scheduledTime: editReminder.scheduledTime || Date.now(),
         daysOfWeek: editReminder.daysOfWeek || [],
       });
+      setIntervalInput(String(editReminder.repeatInterval || 1));
     }
   }, [editReminder]);
 
@@ -69,10 +71,14 @@ export default function ReminderEditScreen({ navigation, route }) {
     if (!form.text.trim()) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     
+    // Ensure repeatInterval is valid before saving
+    const finalInterval = parseInt(intervalInput, 10) || 1;
+    const finalForm = { ...form, repeatInterval: finalInterval };
+
     if (editReminder) {
-      await updateReminder({ ...form });
+      await updateReminder(finalForm);
     } else {
-      await addReminder({ id: uuid.v4(), ...form, createdAt: Date.now() });
+      await addReminder({ id: uuid.v4(), ...finalForm, createdAt: Date.now() });
     }
     navigation.goBack();
   };
@@ -86,6 +92,12 @@ export default function ReminderEditScreen({ navigation, route }) {
       return { ...f, daysOfWeek: newDays };
     });
     Haptics.selectionAsync();
+  };
+
+  const updateInterval = (val) => {
+    const newVal = Math.max(1, val);
+    setForm(f => ({ ...f, repeatInterval: newVal }));
+    setIntervalInput(String(newVal));
   };
 
   return (
@@ -174,11 +186,37 @@ export default function ReminderEditScreen({ navigation, route }) {
                   <Text style={styles.fieldLabel}>Custom Recurrence</Text>
                   <View style={{ flexDirection: 'row', gap: 10, zIndex: 10, marginBottom: 16 }}>
                     <View style={styles.intervalBox}>
-                      <Pressable onPress={() => setForm(f => ({ ...f, repeatInterval: Math.max(1, f.repeatInterval - 1) }))}>
+                      <Pressable onPress={() => {
+                        const current = parseInt(intervalInput, 10) || 1;
+                        const newVal = Math.max(1, current - 1);
+                        updateInterval(newVal);
+                      }}>
                         <Feather name="minus" size={16} color={Colors.mid} />
                       </Pressable>
-                      <Text style={styles.intervalVal}>{form.repeatInterval}</Text>
-                      <Pressable onPress={() => setForm(f => ({ ...f, repeatInterval: f.repeatInterval + 1 }))}>
+                      <TextInput
+                        style={styles.intervalInput}
+                        value={intervalInput}
+                        onChangeText={t => {
+                          const sanitized = t.replace(/[^0-9]/g, '');
+                          setIntervalInput(sanitized);
+                          if (sanitized !== '') {
+                            const val = parseInt(sanitized, 10);
+                            setForm(f => ({ ...f, repeatInterval: val }));
+                          }
+                        }}
+                        onBlur={() => {
+                          if (intervalInput === '' || parseInt(intervalInput, 10) === 0) {
+                            updateInterval(1);
+                          }
+                        }}
+                        keyboardType="number-pad"
+                        selectTextOnFocus
+                      />
+                      <Pressable onPress={() => {
+                        const current = parseInt(intervalInput, 10) || 1;
+                        const newVal = current + 1;
+                        updateInterval(newVal);
+                      }}>
                         <Feather name="plus" size={16} color={Colors.mid} />
                       </Pressable>
                     </View>
@@ -431,6 +469,14 @@ const styles = StyleSheet.create({
   intervalBox: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: Colors.sea, borderRadius: Radii.md, paddingHorizontal: 12, height: 46,
+  },
+  intervalInput: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.ink,
+    paddingVertical: 0,
   },
   intervalVal: { fontSize: 16, fontWeight: '600', color: Colors.ink },
   unitDropdown: {
