@@ -45,11 +45,30 @@ export default function ReminderCard({ reminder, onToggle, onDelete, onEdit, onT
     onToggle?.(reminder.id);
   };
 
-  const repeatText = reminder.repeatType === 'custom'
-    ? `Every ${reminder.repeatInterval}h`
-    : reminder.repeatType === 'daily'
-    ? 'Daily'
-    : 'Once';
+  const getRepeatText = () => {
+    if (reminder.repeatType === 'daily') return 'Daily';
+    if (reminder.repeatType === 'weekend') return 'Weekends';
+    if (reminder.repeatType === 'once') return 'Once';
+    if (reminder.repeatType === 'custom') {
+      const unit = reminder.repeatUnit || 'hours';
+      const interval = reminder.repeatInterval || 1;
+      let unitLabel = interval === 1 ? unit.slice(0, -1) : unit;
+      if (unit === 'years' && interval === 1) unitLabel = 'year';
+      
+      let text = `Every ${interval} ${unitLabel}`;
+      
+      if (unit === 'weeks' && reminder.daysOfWeek && reminder.daysOfWeek.length > 0) {
+        const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const days = reminder.daysOfWeek.map(d => dayLabels[d - 1]).join(', ');
+        text += ` on ${days}`;
+      }
+      
+      return text;
+    }
+    return 'Once';
+  };
+
+  const repeatText = getRepeatText();
 
   const timeStr = reminder.scheduledTime
     ? new Date(reminder.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

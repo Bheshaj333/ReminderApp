@@ -22,8 +22,23 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.bheshaj.ReminderApp"
+      "package": "com.bheshaj.ReminderApp",
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
     },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#78BDAF"
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     },

@@ -14,6 +14,7 @@ import RemindersScreen from '../screens/RemindersScreen';
 import FocusScreen from '../screens/FocusScreen';
 import VoiceScreen from '../screens/VoiceScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import ReminderEditScreen from '../screens/ReminderEditScreen';
 import FullscreenReminder from '../components/FullscreenReminder';
 import { useApp } from '../store/AppContext';
 
@@ -99,6 +100,11 @@ export default function AppNavigator() {
     <View style={{ flex: 1 }}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Main" component={MainTabs} />
+        <Stack.Screen 
+          name="ReminderEdit" 
+          component={ReminderEditScreen} 
+          options={{ presentation: 'card', gestureEnabled: true }}
+        />
         <Stack.Screen
           name="Settings"
           component={SettingsScreen}
