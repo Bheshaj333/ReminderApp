@@ -76,10 +76,12 @@ export default function ReminderEditScreen({ navigation, route }) {
     const finalForm = { ...form, repeatInterval: finalInterval };
 
     if (editReminder) {
-      await updateReminder(finalForm);
+      updateReminder(finalForm);
     } else {
-      await addReminder({ id: uuid.v4(), ...finalForm, createdAt: Date.now() });
+      addReminder({ id: uuid.v4(), ...finalForm, createdAt: Date.now() });
     }
+    
+    // Close screen immediately
     navigation.goBack();
   };
 

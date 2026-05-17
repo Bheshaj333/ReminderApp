@@ -27,8 +27,8 @@ const MODE_COLORS = {
 };
 
 export default function HomeScreen({ navigation }) {
-  const { state, updateSettings, addReminder } = useApp();
-  const { settings, reminders } = state;
+  const { state, updateSettings, addReminder, dismissReminder, snoozeReminder, ignoreReminder } = useApp();
+  const { settings, reminders, activeReminder } = state;
 
   const [quickText, setQuickText] = useState('');
   const [currentPhrase, setCurrentPhrase] = useState('Drink some water.');
@@ -39,6 +39,9 @@ export default function HomeScreen({ navigation }) {
   const phraseOpacity = useSharedValue(1);
   const liveY = useSharedValue(0);
   const inputRef = useRef(null);
+
+  const displayPhrase = activeReminder?.text || currentPhrase;
+  const displayIcon = activeReminder?.icon || phraseSet;
 
   const phraseKeys = Object.keys(VOICE_PHRASES);
   let phraseIdx = useRef(0);
@@ -145,24 +148,33 @@ export default function HomeScreen({ navigation }) {
           <Pressable onPress={() => setShowFullscreen(true)} style={[styles.mainCard, Shadows.md]}>
             <View style={styles.cardAccent} />
             <View style={styles.cardBody}>
-              <Text style={styles.cardEyebrow}>Right now · escalating</Text>
-              <Animated.Text style={[styles.cardPhrase, phraseStyle]}>{currentPhrase}</Animated.Text>
-              <EscalationBar currentStep={escStep} />
+              <Text style={styles.cardEyebrow}>{activeReminder ? 'Attention Required' : 'Right now · escalating'}</Text>
+              <Animated.Text style={[styles.cardPhrase, phraseStyle]}>{displayPhrase}</Animated.Text>
+              <EscalationBar currentStep={activeReminder ? (activeReminder.burstIndex ?? 0) + 1 : escStep} />
               <View style={styles.actionRow}>
                 <PressButton
-                  label="✓ Done"
-                  onPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); }}
+                  label="Done"
+                  onPress={() => { 
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); 
+                    if (activeReminder) dismissReminder(activeReminder);
+                  }}
                   variant="primary"
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, backgroundColor: activeReminder ? Colors.deep : Colors.seafoam }}
                 />
                 <PressButton
                   label="Snooze 5m"
-                  onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (activeReminder) snoozeReminder(activeReminder);
+                  }}
                   variant="secondary"
                 />
                 <PressButton
                   label="Ignore"
-                  onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (activeReminder) ignoreReminder(activeReminder);
+                  }}
                   variant="ghost"
                 />
               </View>

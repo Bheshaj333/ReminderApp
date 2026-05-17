@@ -17,11 +17,14 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
   const opacity = useSharedValue(0);
   const emojiY = useSharedValue(0);
   const [holdProgress, setHoldProgress] = useState(0);
+  const [isRead, setIsRead] = useState(false);
   const holdInterval = useRef(null);
   const progressVal = useSharedValue(0);
   const [remainingRepeats, setRemainingRepeats] = useState(0);
   const isClosing = useRef(false);
   const lastBurstIndex = useRef(-1);
+
+  const timeoutRef = useRef(null);
 
   useEffect(() => {
     if (visible) {
@@ -44,36 +47,51 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
       
       if (burstIndex !== lastBurstIndex.current) {
         lastBurstIndex.current = burstIndex;
+        setIsRead(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        speak(reminder?.text || 'Reminder', 'default');
-      }
-
-      // If it's the last burst, we might want to auto-dismiss after a while
-      if (burstIndex >= count - 1) {
-        setTimeout(() => {
-          if (visible && !isClosing.current) onDone?.();
-        }, 10000); // Give it some time
+        speak(reminder?.text || 'Reminder', 'default', () => {
+          setIsRead(true);
+          // Auto close after reading finishes so user can see home screen Done button
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          timeoutRef.current = setTimeout(() => {
+            if (!isClosing.current && visible) {
+               onIgnore?.();
+            }
+          }, 4000);
+        });
       }
     } else {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       opacity.value = withTiming(0, { duration: 200 });
       scale.value = withTiming(0.9, { duration: 200 });
       progressVal.value = 0;
       lastBurstIndex.current = -1;
+      setIsRead(false);
       stopSpeech();
     }
-  }, [visible, reminder?.id, reminder?.burstIndex]);
+
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, [visible, reminder?.id, reminder?.burstIndex, reminder?.occurrenceTime]);
 
   const handleSnooze = () => {
+     if (isClosing.current) return;
+     stopSpeech();
      isClosing.current = true;
      onSnooze?.();
   };
 
   const handleIgnore = () => {
+     if (isClosing.current) return;
+     stopSpeech();
      isClosing.current = true;
      onIgnore?.();
   };
 
   const handleDoneAction = () => {
+     if (isClosing.current) return;
+     stopSpeech();
      isClosing.current = true;
      onDone?.();
   };
@@ -90,6 +108,7 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
   }));
 
   const startHold = () => {
+    if (isRead) return; // No hold needed if already read
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     let progress = 0;
     holdInterval.current = setInterval(() => {
@@ -123,30 +142,41 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
   if (!visible && opacity.value === 0) return null;
 
   return (
-    <Modal transparent visible={visible} statusBarTranslucent animationType="none">
+    <Modal
+      transparent
+      visible={visible}
+      statusBarTranslucent
+      animationType="none"
+      onRequestClose={handleIgnore}
+    >
       <Animated.View style={[styles.overlay, overlayStyle]}>
         <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
         <View style={styles.bg} />
 
         <Animated.View style={[styles.card, cardStyle, Shadows.lg]}>
           <View style={styles.repeatBadge}>
-             <Text style={styles.repeatBadgeText}>{remainingRepeats} left</Text>
+             <Text style={styles.repeatBadgeText}>Step {(reminder?.burstIndex ?? 0) + 1} of {reminder?.repeatCount || 1}</Text>
           </View>
           <Animated.Text style={[styles.emoji, emojiStyle]}>{emoji}</Animated.Text>
 
           <Text style={styles.heading}>{reminder?.text || 'Time for a reminder.'}</Text>
           <Text style={styles.quote}>{quote}</Text>
 
-          {/* Hold to dismiss */}
+          {/* Action Button: Hold to shut down OR Tap Done */}
           <View style={styles.holdWrap}>
             <Pressable
-              onPressIn={startHold}
-              onPressOut={stopHold}
-              style={[styles.holdBtn, { overflow: 'hidden' }]}
+              onPress={isRead ? handleDoneAction : undefined}
+              onPressIn={!isRead ? startHold : undefined}
+              onPressOut={!isRead ? stopHold : undefined}
+              style={[
+                styles.holdBtn, 
+                { overflow: 'hidden' },
+                isRead && { backgroundColor: Colors.deep, borderColor: Colors.deeper, borderWidth: 1 }
+              ]}
             >
-              <View style={[styles.holdFill, { width: `${holdProgress}%` }]} />
-              <Text style={styles.holdLabel}>
-                {holdProgress > 0 ? `${Math.round(holdProgress)}%` : 'Hold to shut down'}
+              {!isRead && <View style={[styles.holdFill, { width: `${holdProgress}%` }]} />}
+              <Text style={[styles.holdLabel, isRead && { color: Colors.white, fontWeight: '700' }]}>
+                {isRead ? 'Done' : (holdProgress > 0 ? `${Math.round(holdProgress)}%` : 'Hold to shut down')}
               </Text>
             </Pressable>
           </View>

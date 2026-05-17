@@ -4,6 +4,7 @@ const KEYS = {
   REMINDERS: '@interrupt/reminders',
   SETTINGS: '@interrupt/settings',
   SESSIONS: '@interrupt/sessions',
+  DISMISSALS: '@interrupt/dismissals',
 };
 
 export async function saveReminders(reminders) {
@@ -13,6 +14,15 @@ export async function saveReminders(reminders) {
 export async function loadReminders() {
   const raw = await AsyncStorage.getItem(KEYS.REMINDERS);
   return raw ? JSON.parse(raw) : [];
+}
+
+export async function saveDismissals(dismissals) {
+  await AsyncStorage.setItem(KEYS.DISMISSALS, JSON.stringify(dismissals));
+}
+
+export async function loadDismissals() {
+  const raw = await AsyncStorage.getItem(KEYS.DISMISSALS);
+  return raw ? JSON.parse(raw) : {};
 }
 
 export async function saveSettings(settings) {

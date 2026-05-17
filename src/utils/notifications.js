@@ -12,9 +12,14 @@ Notifications.setNotificationHandler({
 });
 
 export async function requestPermissions() {
-  if (!Device.isDevice) return false;
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  let finalStatus = existingStatus;
+
+  if (existingStatus !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('reminders', {
       name: 'Reminders',
@@ -27,42 +32,79 @@ export async function requestPermissions() {
     });
   }
 
-  if (existing === 'granted') return true;
-  const { status } = await Notifications.requestPermissionsAsync();
-  return status === 'granted';
+  return finalStatus === 'granted';
 }
 
 export async function scheduleReminder(reminder) {
-  const { id, text, scheduledTime, repeatType, repeatInterval, repeatUnit, escalationEnabled, repeatCount, burstInterval } = reminder;
+  const { id, text, scheduledTime, repeatType, repeatInterval, repeatUnit, escalationEnabled, repeatCount, burstInterval, daysOfWeek } = reminder;
   
-  // Verify permissions before scheduling
   const hasPermission = await requestPermissions();
   if (!hasPermission) {
-    console.warn('[Notification] Cannot schedule: Permissions not granted.');
+    console.warn('[Notification] No permission to schedule notifications');
     return null;
   }
 
   const count = repeatCount || 1;
-  const burst = burstInterval || 1; // minutes
+  const burst = burstInterval || 1; 
 
-  // Cancel existing
   await cancelReminder(id);
 
-  const scheduleOne = async (identifier, trigger, index) => {
+  const scheduleOne = async (identifier, trigger, index, baseOccTime) => {
     try {
+      // EXPO-NOTIFICATIONS MANDATE: Trigger must be correctly formatted.
+      // It MUST contain a 'type' OR 'channelId' entry.
+      
+      let finalTrigger = {};
+      
+      if (trigger instanceof Date) {
+        finalTrigger = { type: 'date', date: trigger.getTime() };
+      } else {
+        finalTrigger = { ...trigger };
+        // Map common properties to types if missing
+        if (!finalTrigger.type) {
+          if (finalTrigger.seconds !== undefined) {
+            finalTrigger.type = 'timeInterval';
+          } else if (finalTrigger.hour !== undefined) {
+            if (Platform.OS === 'android') {
+              finalTrigger.type = finalTrigger.weekday !== undefined ? 'weekly' : 'daily';
+            } else {
+              finalTrigger.type = 'calendar';
+            }
+          } else if (finalTrigger.date !== undefined) {
+            finalTrigger.type = 'date';
+          }
+        }
+      }
+
+      const content = {
+        title: 'interrupt',
+        body: text,
+        data: { 
+          reminderId: id, 
+          escalation: escalationEnabled, 
+          burstIndex: index,
+          occurrenceTime: baseOccTime
+        },
+        sound: true,
+        vibrate: true,
+        categoryIdentifier: 'reminder',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+      };
+
+      if (Platform.OS === 'android') {
+        content.channelId = 'reminders';
+        finalTrigger.channelId = 'reminders';
+        
+        // Android specific type mapping for calendar triggers
+        if (finalTrigger.type === 'calendar') {
+          finalTrigger.type = finalTrigger.weekday !== undefined ? 'weekly' : 'daily';
+        }
+      }
+
       return await Notifications.scheduleNotificationAsync({
         identifier,
-        content: {
-          title: 'interrupt',
-          body: text,
-          data: { reminderId: id, escalation: escalationEnabled, burstIndex: index },
-          sound: true,
-          categoryIdentifier: 'reminder',
-          // Max priority for heads-up notification and breaking through idle
-          priority: Platform.OS === 'android' ? Notifications.AndroidNotificationPriority.MAX : undefined,
-          ...(Platform.OS === 'android' ? { channelId: 'reminders' } : {}),
-        },
-        trigger,
+        content,
+        trigger: finalTrigger,
       });
     } catch (err) {
       console.error(`[Notification] Failed to schedule ${identifier}:`, err);
@@ -70,162 +112,113 @@ export async function scheduleReminder(reminder) {
     }
   };
 
+  const now = Date.now();
+  
+  const ensureFuture = (date) => {
+    let d = new Date(date);
+    if (d.getTime() <= now) {
+      return new Date(now + 5000); // 5 seconds from now
+    }
+    return d;
+  };
+
   if (repeatType === 'once' && scheduledTime) {
     let lastId = null;
-    const now = Date.now();
-    console.log(`[Notification] Scheduling 'once' reminder for: ${new Date(scheduledTime).toLocaleTimeString()} (Current: ${new Date(now).toLocaleTimeString()})`);
+    const baseDate = ensureFuture(scheduledTime);
+    const baseOccTime = `once_${baseDate.getTime()}`;
     
     for (let i = 0; i < count; i++) {
-      const time = scheduledTime + (i * burst * 60 * 1000);
-      const finalTime = (i === 0 && time < now) ? now + 2000 : time;
-      
-      if (finalTime < now) {
-         console.log(`[Notification] Skipping burst ${i} because ${new Date(finalTime).toLocaleTimeString()} is in the past.`);
-         continue;
-      }
-      
-      console.log(`[Notification] Triggering burst ${i} at: ${new Date(finalTime).toLocaleTimeString()}`);
-      // lastId = await scheduleOne(`${id}_${i}`, finalTime, i);
-      lastId = await scheduleOne(
-        `${id}_${i}`,
-        {
-          type: 'date',
-          date: new Date(finalTime),
-          channelId: 'reminders',
-        },
-        i
-      );
+      const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
+      lastId = await scheduleOne(`${id}_${i}`, { type: 'date', date: time.getTime() }, i, baseOccTime);
     }
     return lastId;
   }
 
   if (repeatType === 'daily' && scheduledTime) {
     const baseDate = new Date(scheduledTime);
-    console.log(`[Notification] Scheduling 'daily' reminder for: ${baseDate.toLocaleTimeString()}`);
+    const hour = baseDate.getHours();
+    const minute = baseDate.getMinutes();
+    const baseOccTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+    
     let lastId = null;
     for (let i = 0; i < count; i++) {
-      const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
+      const burstTime = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
       lastId = await scheduleOne(`${id}_${i}`, {
         type: 'calendar',
-        hour: time.getHours(),
-        minute: time.getMinutes(),
+        hour: burstTime.getHours(),
+        minute: burstTime.getMinutes(),
         repeats: true,
-      }, i);
+      }, i, baseOccTime);
     }
     return lastId;
   }
 
   if (repeatType === 'weekend' && scheduledTime) {
     const baseDate = new Date(scheduledTime);
-    console.log(`[Notification] Scheduling 'weekend' reminder for: ${baseDate.toLocaleTimeString()}`);
+    const hour = baseDate.getHours();
+    const minute = baseDate.getMinutes();
+    const baseOccTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+    
     let lastId = null;
     for (let i = 0; i < count; i++) {
-      const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
-      // Schedule for Saturday (7)
-      await scheduleOne(`${id}_sat_${i}`, { 
-        type: 'calendar',
-        weekday: 7, 
-        hour: time.getHours(), 
-        minute: time.getMinutes(), 
-        repeats: true 
-      }, i);
-      // Schedule for Sunday (1)
-      lastId = await scheduleOne(`${id}_sun_${i}`, { 
-        type: 'calendar',
-        weekday: 1, 
-        hour: time.getHours(), 
-        minute: time.getMinutes(), 
-        repeats: true 
-      }, i);
+      const burstTime = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
+      const bHour = burstTime.getHours();
+      const bMin = burstTime.getMinutes();
+
+      // Saturday (7 in expo-notifications)
+      await scheduleOne(`${id}_sat_${i}`, { type: 'calendar', weekday: 7, hour: bHour, minute: bMin, repeats: true }, i, baseOccTime);
+      // Sunday (1 in expo-notifications)
+      lastId = await scheduleOne(`${id}_sun_${i}`, { type: 'calendar', weekday: 1, hour: bHour, minute: bMin, repeats: true }, i, baseOccTime);
     }
     return lastId;
   }
 
   if (repeatType === 'custom' && repeatInterval && scheduledTime) {
-    const now = Date.now();
     const baseDate = new Date(scheduledTime);
-    const promises = [];
     
-    console.log(`[Notification] Scheduling 'custom' reminder every ${repeatInterval} ${repeatUnit}`);
-
-    if (repeatUnit === 'weeks' || repeatUnit === 'months' || repeatUnit === 'years') {
-      // For weeks, months, and years, we calculate future dates manually
-      for (let i = 0; i < 10; i++) { // Schedule next 10 occurrences
-        let occurrenceDate = new Date(baseDate);
-        
-        if (repeatUnit === 'weeks') {
-          const days = reminder.daysOfWeek && reminder.daysOfWeek.length > 0 ? reminder.daysOfWeek : [baseDate.getDay() + 1];
-          const weekStart = new Date(baseDate);
-          weekStart.setDate(baseDate.getDate() + (i * repeatInterval * 7));
-          
-          for (const day of days) {
-            const d = new Date(weekStart);
-            const diff = (day - 1) - d.getDay();
-            d.setDate(d.getDate() + diff);
-            
-            for (let j = 0; j < count; j++) {
-              const time = new Date(d.getTime() + (j * burst * 60 * 1000));
-              if (time.getTime() < now) continue;
-              
-              promises.push(scheduleOne(`${id}_${i}_${day}_${j}`, {
-                type: 'date',
-                date: time,
-                channelId: 'reminders',
-              }, j));
-            }
-          }
-        } else if (repeatUnit === 'months') {
-          occurrenceDate.setMonth(baseDate.getMonth() + (i * repeatInterval));
-          for (let j = 0; j < count; j++) {
-            const time = new Date(occurrenceDate.getTime() + (j * burst * 60 * 1000));
-            if (time.getTime() < now) continue;
-            
-            promises.push(scheduleOne(`${id}_${i}_${j}`, {
-              type: 'date',
-              date: time,
-              channelId: 'reminders',
-            }, j));
-          }
-        } else if (repeatUnit === 'years') {
-          occurrenceDate.setFullYear(baseDate.getFullYear() + (i * repeatInterval));
-          for (let j = 0; j < count; j++) {
-            const time = new Date(occurrenceDate.getTime() + (j * burst * 60 * 1000));
-            if (time.getTime() < now) continue;
-            
-            promises.push(scheduleOne(`${id}_${i}_${j}`, {
-              type: 'date',
-              date: time,
-              channelId: 'reminders',
-            }, j));
-          }
+    if (repeatUnit === 'weeks') {
+      const days = daysOfWeek && daysOfWeek.length > 0 ? daysOfWeek : [baseDate.getDay() + 1];
+      let lastId = null;
+      for (const day of days) {
+        const baseOccTime = `custom_w_${day}`;
+        for (let i = 0; i < count; i++) {
+          const burstTime = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
+          // Expo weekday: 1 (Sun) to 7 (Sat)
+          lastId = await scheduleOne(`${id}_w${day}_${i}`, { 
+            type: 'calendar',
+            weekday: day, 
+            hour: burstTime.getHours(), 
+            minute: burstTime.getMinutes(), 
+            repeats: repeatInterval === 1 
+          }, i, baseOccTime);
         }
       }
-    } else {
-      // Original logic for minutes, hours, days
-      let intervalSeconds = repeatInterval;
-      if (repeatUnit === 'minutes') intervalSeconds *= 60;
-      else if (repeatUnit === 'days') intervalSeconds *= 86400;
-      else intervalSeconds *= 3600; // default hours
-
-      for (let i = 0; i < 20; i++) {
-        const baseTime = scheduledTime + (i * intervalSeconds * 1000);
-        for (let j = 0; j < count; j++) {
-          const time = baseTime + (j * burst * 60 * 1000);
-          if (time < now) continue;
-          promises.push(
-            scheduleOne(`${id}_${i}_${j}`, {
-              type: 'date',
-              date: new Date(time),
-              channelId: 'reminders',
-            }, j)
-          );
-        }
-      }
+      return lastId;
+    } 
+    
+    let intervalSeconds = repeatInterval;
+    if (repeatUnit === 'minutes') intervalSeconds *= 60;
+    else if (repeatUnit === 'hours') intervalSeconds *= 3600;
+    else if (repeatUnit === 'days') intervalSeconds *= 86400;
+    else {
+      const time = ensureFuture(scheduledTime);
+      return await scheduleOne(`${id}_0`, { type: 'date', date: time.getTime() }, 0, `custom_${time.getTime()}`);
     }
-    const results = await Promise.all(promises);
-    return results.length > 0 ? results[results.length - 1] : null;
-  }
 
+    let lastId = null;
+    for (let i = 0; i < count; i++) {
+      const delayFromStart = (i * burst * 60);
+      const time = ensureFuture(scheduledTime + (delayFromStart * 1000));
+      const secondsUntilFirst = Math.max(1, Math.floor((time.getTime() - now) / 1000));
+      
+      lastId = await scheduleOne(`${id}_${i}`, {
+        type: 'timeInterval',
+        seconds: secondsUntilFirst,
+        repeats: false, 
+      }, i, `custom_${time.getTime()}`);
+    }
+    return lastId;
+  }
   return null;
 }
 
@@ -261,12 +254,14 @@ export async function scheduleEscalatingReminder(reminder, escalationStep = 0) {
       body: reminder.text,
       data: { reminderId: reminder.id, escalationStep: step, isEscalation: true },
       sound: true,
-      priority: Platform.OS === 'android' ? Notifications.AndroidNotificationPriority.MAX : undefined,
+      vibrate: true,
+      priority: Notifications.AndroidNotificationPriority.MAX,
     },
     trigger: { 
       type: 'timeInterval',
       seconds: delays[step] + 1,
       channelId: 'reminders',
+      precise: true,
     },
   });
 }

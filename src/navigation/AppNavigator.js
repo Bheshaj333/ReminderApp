@@ -93,11 +93,11 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
-  const { state, dispatch, snoozeReminder, ignoreReminder } = useApp();
+  const { state, dismissReminder, snoozeReminder, ignoreReminder } = useApp();
   const { activeReminder } = state;
 
   return (
-    <View style={{ flex: 1 }}>
+    <>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Main" component={MainTabs} />
         <Stack.Screen 
@@ -115,11 +115,11 @@ export default function AppNavigator() {
       <FullscreenReminder
         visible={!!activeReminder}
         reminder={activeReminder}
-        onDone={() => dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null })}
+        onDone={() => dismissReminder(activeReminder)}
         onSnooze={() => snoozeReminder(activeReminder)}
         onIgnore={() => ignoreReminder(activeReminder)}
       />
-    </View>
+    </>
   );
 }
 

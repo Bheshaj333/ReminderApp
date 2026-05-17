@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import { loadReminders, saveReminders, loadSettings, saveSettings } from '../utils/storage';
+import { loadReminders, saveReminders, loadSettings, saveSettings, loadDismissals, saveDismissals } from '../utils/storage';
 import { scheduleReminder, cancelReminder, addNotificationReceivedListener, addNotificationResponseListener } from '../utils/notifications';
 
 const AppContext = createContext(null);
@@ -15,6 +15,7 @@ const initialState = {
     untilDoneEnabled: true,
   },
   activeReminder: null,
+  dismissedOccurrences: {}, // { "reminderId_occurrenceTime": "YYYY-MM-DD" }
   loading: true,
 };
 
@@ -49,6 +50,18 @@ function reducer(state, action) {
     case 'SET_ACTIVE_REMINDER':
       return { ...state, activeReminder: action.payload };
 
+    case 'DISMISS_OCCURRENCE': {
+      const { reminderId, occurrenceTime } = action.payload;
+      const today = new Date().toISOString().split('T')[0];
+      return {
+        ...state,
+        dismissedOccurrences: {
+          ...state.dismissedOccurrences,
+          [`${reminderId}_${occurrenceTime}`]: today,
+        },
+      };
+    }
+
     default:
       return state;
   }
@@ -59,47 +72,55 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     async function hydrate() {
-      const [reminders, settings] = await Promise.all([
+      const [reminders, settings, dismissedOccurrences] = await Promise.all([
         loadReminders(),
         loadSettings(),
+        loadDismissals(),
       ]);
-      dispatch({ type: 'HYDRATE', payload: { reminders, settings } });
+      dispatch({ type: 'HYDRATE', payload: { reminders, settings, dismissedOccurrences } });
     }
     hydrate();
   }, []);
 
   useEffect(() => {
-    const notifListener = addNotificationReceivedListener(notification => {
-      const { reminderId } = notification.request.content.data;
-      if (reminderId) {
-        const reminder = state.reminders.find(r => r.id === reminderId);
-        if (reminder) {
-          dispatch({ type: 'SET_ACTIVE_REMINDER', payload: reminder });
-        }
+    const handleNotification = (data) => {
+      const { reminderId, occurrenceTime, burstIndex } = data;
+      if (!reminderId) return;
+
+      const reminder = state.reminders.find(r => r.id === reminderId);
+      if (!reminder) return;
+
+      // Check if this occurrence is dismissed for today
+      const today = new Date().toISOString().split('T')[0];
+      const dismissalKey = `${reminderId}_${occurrenceTime}`;
+      if (state.dismissedOccurrences[dismissalKey] === today) {
+        console.log(`[AppContext] Ignoring dismissed burst ${burstIndex} for ${occurrenceTime}`);
+        return;
       }
+
+      dispatch({ type: 'SET_ACTIVE_REMINDER', payload: { ...reminder, burstIndex, occurrenceTime } });
+    };
+
+    const notifListener = addNotificationReceivedListener(notification => {
+      handleNotification(notification.request.content.data);
     });
 
     const responseListener = addNotificationResponseListener(response => {
-      const { reminderId } = response.notification.request.content.data;
-      if (reminderId) {
-        const reminder = state.reminders.find(r => r.id === reminderId);
-        if (reminder) {
-          dispatch({ type: 'SET_ACTIVE_REMINDER', payload: reminder });
-        }
-      }
+      handleNotification(response.notification.request.content.data);
     });
 
     return () => {
       notifListener.remove();
       responseListener.remove();
     };
-  }, [state.reminders]);
+  }, [state.reminders, state.dismissedOccurrences]);
 
   useEffect(() => {
     if (!state.loading) {
       saveReminders(state.reminders);
+      saveDismissals(state.dismissedOccurrences);
     }
-  }, [state.reminders, state.loading]);
+  }, [state.reminders, state.dismissedOccurrences, state.loading]);
 
   useEffect(() => {
     if (!state.loading) {
@@ -140,8 +161,12 @@ export function AppProvider({ children }) {
   };
 
   const snoozeReminder = async (reminder) => {
+    const { occurrenceTime } = reminder; 
+    if (occurrenceTime && occurrenceTime !== 'once') {
+      dispatch({ type: 'DISMISS_OCCURRENCE', payload: { reminderId: reminder.id, occurrenceTime } });
+    }
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
-    // Schedule a one-time reminder in 5 minutes
+    
     const snoozeTime = Date.now() + 5 * 60 * 1000;
     await scheduleReminder({
       ...reminder,
@@ -153,13 +178,25 @@ export function AppProvider({ children }) {
 
   const ignoreReminder = async (reminder) => {
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
-    // If it's a repeating reminder, it will trigger again anyway.
-    // But if we want it to trigger "as per defined interval" immediately after being ignored?
-    // Usually, ignore means "don't do anything, let the next scheduled one happen".
-    // But user said: "igonre will make it repeat again as per the defined interval"
-    // So we re-schedule it to trigger after its interval.
-    if (reminder.repeatInterval) {
-      await scheduleReminder(reminder);
+  };
+
+  const dismissReminder = async (reminder) => {
+    const { occurrenceTime, repeatCount, id } = reminder;
+    if (occurrenceTime && occurrenceTime !== 'once') {
+      dispatch({ type: 'DISMISS_OCCURRENCE', payload: { reminderId: id, occurrenceTime } });
+    }
+    dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
+    
+    // Attempt to clear related notifications from the shade
+    try {
+      const count = repeatCount || 10; // Try a reasonable range
+      for (let i = 0; i < count; i++) {
+        await Notifications.dismissNotificationAsync(`${id}_${i}`).catch(() => {});
+        await Notifications.dismissNotificationAsync(`${id}_sat_${i}`).catch(() => {});
+        await Notifications.dismissNotificationAsync(`${id}_sun_${i}`).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('[AppContext] Could not dismiss notifications:', err);
     }
   };
 
@@ -170,7 +207,7 @@ export function AppProvider({ children }) {
   return (
     <AppContext.Provider value={{ 
       state, addReminder, updateReminder, deleteReminder, 
-      toggleReminder, updateSettings, snoozeReminder, ignoreReminder, dispatch 
+      toggleReminder, updateSettings, ignoreReminder, dismissReminder, snoozeReminder, dispatch 
     }}>
       {children}
     </AppContext.Provider>
