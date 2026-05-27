@@ -129,7 +129,7 @@ export async function scheduleReminder(reminder) {
     
     for (let i = 0; i < count; i++) {
       const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
-      lastId = await scheduleOne(`${id}_${i}`, { type: 'date', date: time.getTime() }, i, baseOccTime);
+      lastId = await scheduleOne(`${id}_${i}`, { type: 'date', date: time.getTime(), precise: true }, i, baseOccTime);
     }
     return lastId;
   }
@@ -148,6 +148,7 @@ export async function scheduleReminder(reminder) {
         hour: burstTime.getHours(),
         minute: burstTime.getMinutes(),
         repeats: true,
+        precise: true
       }, i, baseOccTime);
     }
     return lastId;
@@ -166,9 +167,9 @@ export async function scheduleReminder(reminder) {
       const bMin = burstTime.getMinutes();
 
       // Saturday (7 in expo-notifications)
-      await scheduleOne(`${id}_sat_${i}`, { type: 'calendar', weekday: 7, hour: bHour, minute: bMin, repeats: true }, i, baseOccTime);
+      await scheduleOne(`${id}_sat_${i}`, { type: 'calendar', weekday: 7, hour: bHour, minute: bMin, repeats: true, precise: true }, i, baseOccTime);
       // Sunday (1 in expo-notifications)
-      lastId = await scheduleOne(`${id}_sun_${i}`, { type: 'calendar', weekday: 1, hour: bHour, minute: bMin, repeats: true }, i, baseOccTime);
+      lastId = await scheduleOne(`${id}_sun_${i}`, { type: 'calendar', weekday: 1, hour: bHour, minute: bMin, repeats: true, precise: true }, i, baseOccTime);
     }
     return lastId;
   }
@@ -189,7 +190,8 @@ export async function scheduleReminder(reminder) {
             weekday: day, 
             hour: burstTime.getHours(), 
             minute: burstTime.getMinutes(), 
-            repeats: repeatInterval === 1 
+            repeats: repeatInterval === 1,
+            precise: true
           }, i, baseOccTime);
         }
       }
@@ -202,7 +204,7 @@ export async function scheduleReminder(reminder) {
     else if (repeatUnit === 'days') intervalSeconds *= 86400;
     else {
       const time = ensureFuture(scheduledTime);
-      return await scheduleOne(`${id}_0`, { type: 'date', date: time.getTime() }, 0, `custom_${time.getTime()}`);
+      return await scheduleOne(`${id}_0`, { type: 'date', date: time.getTime(), precise: true }, 0, `custom_${time.getTime()}`);
     }
 
     let lastId = null;
@@ -215,6 +217,7 @@ export async function scheduleReminder(reminder) {
         type: 'timeInterval',
         seconds: secondsUntilFirst,
         repeats: false, 
+        precise: true
       }, i, `custom_${time.getTime()}`);
     }
     return lastId;
