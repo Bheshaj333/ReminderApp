@@ -19,6 +19,13 @@ const SECTIONS = [
       { key: 'hapticsEnabled', label: 'Haptics', desc: 'Vibration feedback', icon: 'smartphone' },
     ],
   },
+  {
+    title: 'Permissions (Required for Alarms)',
+    items: [
+      { key: 'overlayInfo', label: 'Display over other apps', desc: 'Go to App Info > Advanced > Display over other apps > Allow', icon: 'layers' },
+      { key: 'ignoreDnd', label: 'Bypass Do Not Disturb', desc: 'Ensure "Reminders" channel is set to "Critical" or "Bypass DND"', icon: 'minus-circle' },
+    ],
+  },
 ];
 
 export default function SettingsScreen({ navigation }) {
@@ -26,6 +33,7 @@ export default function SettingsScreen({ navigation }) {
   const { settings } = state;
 
   const toggle = (key) => {
+    if (key === 'overlayInfo' || key === 'ignoreDnd') return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateSettings({ [key]: !settings[key] });
   };
@@ -66,14 +74,16 @@ export default function SettingsScreen({ navigation }) {
                     <Text style={styles.rowLabel}>{item.label}</Text>
                     <Text style={styles.rowDesc}>{item.desc}</Text>
                   </View>
-                  <Switch
-                    value={!!settings[item.key]}
-                    onValueChange={() => toggle(item.key)}
-                    trackColor={{ false: Colors.sea2, true: Colors.sea3 }}
-                    thumbColor={settings[item.key] ? Colors.seafoam : Colors.soft}
-                    ios_backgroundColor={Colors.sea2}
-                    style={{ transform: [{ scaleX: 0.85 }, { scaleY: 0.85 }] }}
-                  />
+                  {item.key !== 'overlayInfo' && item.key !== 'ignoreDnd' && (
+                    <Switch
+                      value={!!settings[item.key]}
+                      onValueChange={() => toggle(item.key)}
+                      trackColor={{ false: Colors.sea2, true: Colors.sea3 }}
+                      thumbColor={settings[item.key] ? Colors.seafoam : Colors.soft}
+                      ios_backgroundColor={Colors.sea2}
+                      style={{ transform: [{ scaleX: 0.85 }, { scaleY: 0.85 }] }}
+                    />
+                  )}
                 </View>
               ))}
             </View>

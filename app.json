@@ -27,7 +27,10 @@
         "SCHEDULE_EXACT_ALARM",
         "POST_NOTIFICATIONS",
         "VIBRATE",
-        "RECEIVE_BOOT_COMPLETED"
+        "RECEIVE_BOOT_COMPLETED",
+        "SYSTEM_ALERT_WINDOW",
+        "USE_FULL_SCREEN_INTENT",
+        "WAKE_LOCK"
       ]
     },
     "plugins": [
@@ -37,7 +40,8 @@
           "icon": "./assets/icon.png",
           "color": "#78BDAF"
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "web": {
       "favicon": "./assets/favicon.png"

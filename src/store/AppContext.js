@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import * as Notifications from 'expo-notifications';
+import notifee from '@notifee/react-native';
 import { loadReminders, saveReminders, loadSettings, saveSettings, loadDismissals, saveDismissals } from '../utils/storage';
 import { scheduleReminder, cancelReminder, addNotificationReceivedListener, addNotificationResponseListener } from '../utils/notifications';
+import { speak } from '../utils/speech';
 
 const AppContext = createContext(null);
 
@@ -77,13 +80,43 @@ export function AppProvider({ children }) {
         loadSettings(),
         loadDismissals(),
       ]);
-      dispatch({ type: 'HYDRATE', payload: { reminders, settings, dismissedOccurrences } });
+      
+      // Check for initial notification from Notifee (Full Screen Intent or Press)
+      const initialNotification = await notifee.getInitialNotification();
+      let initialActive = null;
+      if (initialNotification) {
+        const data = initialNotification.notification.data;
+        const reminder = reminders.find(r => r.id === data.reminderId);
+        if (reminder) {
+          initialActive = { ...reminder, ...data };
+        }
+      } else {
+        // Fallback to expo-notifications
+        const lastResponse = await Notifications.getLastNotificationResponseAsync();
+        if (lastResponse) {
+          const data = lastResponse.notification.request.content.data;
+          const reminder = reminders.find(r => r.id === data.reminderId);
+          if (reminder) {
+            initialActive = { ...reminder, ...data };
+          }
+        }
+      }
+
+      dispatch({ 
+        type: 'HYDRATE', 
+        payload: { 
+          reminders, 
+          settings, 
+          dismissedOccurrences,
+          activeReminder: initialActive 
+        } 
+      });
     }
     hydrate();
   }, []);
 
   useEffect(() => {
-    const handleNotification = (data) => {
+    const handleNotification = (data, body) => {
       const { reminderId, occurrenceTime, burstIndex } = data;
       if (!reminderId) return;
 
@@ -94,26 +127,29 @@ export function AppProvider({ children }) {
       const today = new Date().toISOString().split('T')[0];
       const dismissalKey = `${reminderId}_${occurrenceTime}`;
       if (state.dismissedOccurrences[dismissalKey] === today) {
-        console.log(`[AppContext] Ignoring dismissed burst ${burstIndex} for ${occurrenceTime}`);
         return;
+      }
+
+      if (body) {
+        speak(body, state.settings.voiceStyle);
       }
 
       dispatch({ type: 'SET_ACTIVE_REMINDER', payload: { ...reminder, burstIndex, occurrenceTime } });
     };
 
     const notifListener = addNotificationReceivedListener(notification => {
-      handleNotification(notification.request.content.data);
+      handleNotification(notification.request.content.data, notification.request.content.body);
     });
 
     const responseListener = addNotificationResponseListener(response => {
-      handleNotification(response.notification.request.content.data);
+      handleNotification(response.notification.request.content.data, response.notification.request.content.body);
     });
 
     return () => {
       notifListener.remove();
       responseListener.remove();
     };
-  }, [state.reminders, state.dismissedOccurrences]);
+  }, [state.reminders, state.dismissedOccurrences, state.settings.voiceStyle]);
 
   useEffect(() => {
     if (!state.loading) {
@@ -187,13 +223,14 @@ export function AppProvider({ children }) {
     }
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
     
-    // Attempt to clear related notifications from the shade
+    // Attempt to clear related notifications from the shade using Notifee and Expo
     try {
-      const count = repeatCount || 10; // Try a reasonable range
+      await notifee.cancelNotification(id).catch(() => {});
+      const count = repeatCount || 10;
       for (let i = 0; i < count; i++) {
-        await Notifications.dismissNotificationAsync(`${id}_${i}`).catch(() => {});
-        await Notifications.dismissNotificationAsync(`${id}_sat_${i}`).catch(() => {});
-        await Notifications.dismissNotificationAsync(`${id}_sun_${i}`).catch(() => {});
+        const identifier = `${id}_${i}`;
+        await notifee.cancelNotification(identifier).catch(() => {});
+        await Notifications.dismissNotificationAsync(identifier).catch(() => {});
       }
     } catch (err) {
       console.warn('[AppContext] Could not dismiss notifications:', err);

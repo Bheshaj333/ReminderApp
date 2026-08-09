@@ -139,8 +139,6 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
   ];
   const quote = motivational[Math.floor((reminder?.id?.charCodeAt(0) || 0) % motivational.length)];
 
-  if (!visible && opacity.value === 0) return null;
-
   return (
     <Modal
       transparent

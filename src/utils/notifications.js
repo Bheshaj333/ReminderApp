@@ -1,17 +1,26 @@
 import * as Notifications from 'expo-notifications';
+import notifee, { 
+  AndroidImportance, 
+  AndroidVisibility, 
+  TriggerType, 
+  AndroidCategory,
+  RepeatFrequency,
+  EventType
+} from '@notifee/react-native';
 import * as Device from 'expo-device';
-import { Platform } from 'react-native';
+import * as TaskManager from 'expo-task-manager';
+import { Platform, Linking } from 'react-native';
+import { speak } from './speech';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    priority: Notifications.AndroidImportance.MAX,
-  }),
+// Existing Background Task for expo-notifications fallback
+const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_NOTIFICATION_TASK';
+
+TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error, executionContext }) => {
+   // Legacy task remains as a shell
 });
 
 export async function requestPermissions() {
+  await notifee.requestPermission();
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
 
@@ -21,14 +30,16 @@ export async function requestPermissions() {
   }
 
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('reminders', {
-      name: 'Reminders',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
+    await notifee.createChannel({
+      id: 'alarms',
+      name: 'Reminders (Alarm)',
+      importance: AndroidImportance.HIGH,
+      vibration: true,
+      vibrationPattern: [300, 500, 300, 500],
       lightColor: '#78BDAF',
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      visibility: AndroidVisibility.PUBLIC,
       bypassDnd: true,
-      showBadge: true,
+      sound: 'default',
     });
   }
 
@@ -38,241 +49,150 @@ export async function requestPermissions() {
 export async function scheduleReminder(reminder) {
   const { id, text, scheduledTime, repeatType, repeatInterval, repeatUnit, escalationEnabled, repeatCount, burstInterval, daysOfWeek } = reminder;
   
-  const hasPermission = await requestPermissions();
-  if (!hasPermission) {
-    console.warn('[Notification] No permission to schedule notifications');
-    return null;
-  }
-
+  await requestPermissions();
   const count = repeatCount || 1;
   const burst = burstInterval || 1; 
 
   await cancelReminder(id);
 
-  const scheduleOne = async (identifier, trigger, index, baseOccTime) => {
+  const scheduleOneNotifee = async (identifier, timestamp, index, baseOccTime, repeats = false) => {
     try {
-      // EXPO-NOTIFICATIONS MANDATE: Trigger must be correctly formatted.
-      // It MUST contain a 'type' OR 'channelId' entry.
-      
-      let finalTrigger = {};
-      
-      if (trigger instanceof Date) {
-        finalTrigger = { type: 'date', date: trigger.getTime() };
-      } else {
-        finalTrigger = { ...trigger };
-        // Map common properties to types if missing
-        if (!finalTrigger.type) {
-          if (finalTrigger.seconds !== undefined) {
-            finalTrigger.type = 'timeInterval';
-          } else if (finalTrigger.hour !== undefined) {
-            if (Platform.OS === 'android') {
-              finalTrigger.type = finalTrigger.weekday !== undefined ? 'weekly' : 'daily';
-            } else {
-              finalTrigger.type = 'calendar';
-            }
-          } else if (finalTrigger.date !== undefined) {
-            finalTrigger.type = 'date';
-          }
-        }
-      }
-
-      const content = {
-        title: 'interrupt',
-        body: text,
-        data: { 
-          reminderId: id, 
-          escalation: escalationEnabled, 
-          burstIndex: index,
-          occurrenceTime: baseOccTime
-        },
-        sound: true,
-        vibrate: true,
-        categoryIdentifier: 'reminder',
-        priority: Notifications.AndroidNotificationPriority.MAX,
+      const trigger = {
+        type: TriggerType.TIMESTAMP,
+        timestamp: timestamp,
+        alarmManager: true,
+        repeatFrequency: repeats ? RepeatFrequency.DAILY : undefined,
       };
 
-      if (Platform.OS === 'android') {
-        content.channelId = 'reminders';
-        finalTrigger.channelId = 'reminders';
-        
-        // Android specific type mapping for calendar triggers
-        if (finalTrigger.type === 'calendar') {
-          finalTrigger.type = finalTrigger.weekday !== undefined ? 'weekly' : 'daily';
-        }
-      }
-
-      return await Notifications.scheduleNotificationAsync({
-        identifier,
-        content,
-        trigger: finalTrigger,
-      });
+      await notifee.createTriggerNotification(
+        {
+          id: identifier,
+          title: 'Reminder',
+          body: text,
+          data: { 
+            reminderId: id, 
+            burstIndex: index.toString(),
+            occurrenceTime: baseOccTime
+          },
+          android: {
+            channelId: 'alarms',
+            category: AndroidCategory.ALARM,
+            importance: AndroidImportance.HIGH,
+            fullScreenAction: {
+              id: 'default',
+              launchActivity: 'default',
+            },
+            pressAction: {
+              id: 'default',
+              launchActivity: 'default',
+            },
+            actions: [
+              { title: 'Done', pressAction: { id: 'done' } },
+              { title: 'Snooze', pressAction: { id: 'snooze' } },
+            ],
+          },
+        },
+        trigger
+      );
     } catch (err) {
-      console.error(`[Notification] Failed to schedule ${identifier}:`, err);
-      return null;
+      console.error(`[Notifee] Failed to schedule ${identifier}:`, err);
     }
   };
 
   const now = Date.now();
-  
   const ensureFuture = (date) => {
-    let d = new Date(date);
-    if (d.getTime() <= now) {
-      return new Date(now + 5000); // 5 seconds from now
-    }
-    return d;
+    let d = new Date(date).getTime();
+    return d <= now ? now + 5000 : d;
   };
 
   if (repeatType === 'once' && scheduledTime) {
-    let lastId = null;
     const baseDate = ensureFuture(scheduledTime);
-    const baseOccTime = `once_${baseDate.getTime()}`;
-    
     for (let i = 0; i < count; i++) {
-      const time = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
-      lastId = await scheduleOne(`${id}_${i}`, { type: 'date', date: time.getTime(), precise: true }, i, baseOccTime);
+      const time = baseDate + (i * burst * 60 * 1000);
+      await scheduleOneNotifee(`${id}_${i}`, time, i, `once_${baseDate}`);
     }
-    return lastId;
-  }
-
-  if (repeatType === 'daily' && scheduledTime) {
+  } else if (repeatType === 'daily' && scheduledTime) {
     const baseDate = new Date(scheduledTime);
     const hour = baseDate.getHours();
     const minute = baseDate.getMinutes();
     const baseOccTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
     
-    let lastId = null;
     for (let i = 0; i < count; i++) {
-      const burstTime = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
-      lastId = await scheduleOne(`${id}_${i}`, {
-        type: 'calendar',
-        hour: burstTime.getHours(),
-        minute: burstTime.getMinutes(),
-        repeats: true,
-        precise: true
-      }, i, baseOccTime);
-    }
-    return lastId;
-  }
-
-  if (repeatType === 'weekend' && scheduledTime) {
-    const baseDate = new Date(scheduledTime);
-    const hour = baseDate.getHours();
-    const minute = baseDate.getMinutes();
-    const baseOccTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-    
-    let lastId = null;
-    for (let i = 0; i < count; i++) {
-      const burstTime = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
-      const bHour = burstTime.getHours();
-      const bMin = burstTime.getMinutes();
-
-      // Saturday (7 in expo-notifications)
-      await scheduleOne(`${id}_sat_${i}`, { type: 'calendar', weekday: 7, hour: bHour, minute: bMin, repeats: true, precise: true }, i, baseOccTime);
-      // Sunday (1 in expo-notifications)
-      lastId = await scheduleOne(`${id}_sun_${i}`, { type: 'calendar', weekday: 1, hour: bHour, minute: bMin, repeats: true, precise: true }, i, baseOccTime);
-    }
-    return lastId;
-  }
-
-  if (repeatType === 'custom' && repeatInterval && scheduledTime) {
-    const baseDate = new Date(scheduledTime);
-    
-    if (repeatUnit === 'weeks') {
-      const days = daysOfWeek && daysOfWeek.length > 0 ? daysOfWeek : [baseDate.getDay() + 1];
-      let lastId = null;
-      for (const day of days) {
-        const baseOccTime = `custom_w_${day}`;
-        for (let i = 0; i < count; i++) {
-          const burstTime = new Date(baseDate.getTime() + (i * burst * 60 * 1000));
-          // Expo weekday: 1 (Sun) to 7 (Sat)
-          lastId = await scheduleOne(`${id}_w${day}_${i}`, { 
-            type: 'calendar',
-            weekday: day, 
-            hour: burstTime.getHours(), 
-            minute: burstTime.getMinutes(), 
-            repeats: repeatInterval === 1,
-            precise: true
-          }, i, baseOccTime);
-        }
+      let time = new Date();
+      time.setHours(hour, minute + (i * burst), 0, 0);
+      if (time.getTime() <= now) {
+        time.setDate(time.getDate() + 1);
       }
-      return lastId;
-    } 
-    
-    let intervalSeconds = repeatInterval;
-    if (repeatUnit === 'minutes') intervalSeconds *= 60;
-    else if (repeatUnit === 'hours') intervalSeconds *= 3600;
-    else if (repeatUnit === 'days') intervalSeconds *= 86400;
-    else {
-      const time = ensureFuture(scheduledTime);
-      return await scheduleOne(`${id}_0`, { type: 'date', date: time.getTime(), precise: true }, 0, `custom_${time.getTime()}`);
+      await scheduleOneNotifee(`${id}_${i}`, time.getTime(), i, baseOccTime, true);
     }
+  } else if (repeatType === 'weekend' && scheduledTime) {
+     // Notifee triggers are limited for complex weekly rules, we'll schedule for the next few occurrences
+     const baseDate = new Date(scheduledTime);
+     const hour = baseDate.getHours();
+     const minute = baseDate.getMinutes();
+     
+     const scheduleForDay = async (dayOffset, prefix) => {
+        let time = new Date();
+        time.setHours(hour, minute, 0, 0);
+        let currentDay = time.getDay(); // 0 is Sun, 6 is Sat
+        let distance = (dayOffset - currentDay + 7) % 7;
+        if (distance === 0 && time.getTime() <= now) distance = 7;
+        time.setDate(time.getDate() + distance);
 
-    let lastId = null;
-    for (let i = 0; i < count; i++) {
-      const delayFromStart = (i * burst * 60);
-      const time = ensureFuture(scheduledTime + (delayFromStart * 1000));
-      const secondsUntilFirst = Math.max(1, Math.floor((time.getTime() - now) / 1000));
-      
-      lastId = await scheduleOne(`${id}_${i}`, {
-        type: 'timeInterval',
-        seconds: secondsUntilFirst,
-        repeats: false, 
-        precise: true
-      }, i, `custom_${time.getTime()}`);
-    }
-    return lastId;
+        for (let i = 0; i < count; i++) {
+          const burstTime = new Date(time.getTime() + (i * burst * 60 * 1000));
+          await scheduleOneNotifee(`${id}_${prefix}_${i}`, burstTime.getTime(), i, `weekend_${prefix}`, true);
+        }
+     };
+
+     await scheduleForDay(6, 'sat');
+     await scheduleForDay(0, 'sun');
   }
-  return null;
+
+  return id;
 }
 
 export async function cancelReminder(id) {
   try {
-    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-    const toCancel = scheduled.filter(notif => {
-      const { reminderId } = notif.content.data;
-      return reminderId === id || notif.identifier.startsWith(`${id}_`);
-    });
-    
-    await Promise.all(toCancel.map(notif => 
-      Notifications.cancelScheduledNotificationAsync(notif.identifier).catch(() => {})
-    ));
+    await notifee.cancelNotification(id);
+    // Also cancel all with prefix
+    const displayed = await notifee.getDisplayedNotifications();
+    for (const d of displayed) {
+      if (d.id.startsWith(`${id}_`)) await notifee.cancelNotification(d.id);
+    }
+    const triggerIds = await notifee.getTriggerNotificationIds();
+    for (const tid of triggerIds) {
+      if (tid.startsWith(`${id}_`)) await notifee.cancelNotification(tid);
+    }
   } catch (err) {
-    console.error('[Notification] Error canceling:', err);
+    console.error('[Notifee] Error canceling:', err);
   }
 }
 
 export async function cancelAllReminders() {
-  await Notifications.cancelAllScheduledNotificationsAsync();
-}
-
-export async function scheduleEscalatingReminder(reminder, escalationStep = 0) {
-  const delays = [0, 30, 60, 90, 120]; // seconds
-  const step = Math.min(escalationStep, delays.length - 1);
-  if (step >= delays.length) return;
-
-  await Notifications.scheduleNotificationAsync({
-    identifier: `${reminder.id}_esc_${step}`,
-    content: {
-      title: step >= 3 ? '⚠️ interrupt' : 'interrupt',
-      body: reminder.text,
-      data: { reminderId: reminder.id, escalationStep: step, isEscalation: true },
-      sound: true,
-      vibrate: true,
-      priority: Notifications.AndroidNotificationPriority.MAX,
-    },
-    trigger: { 
-      type: 'timeInterval',
-      seconds: delays[step] + 1,
-      channelId: 'reminders',
-      precise: true,
-    },
-  });
+  await notifee.cancelAllNotifications();
 }
 
 export function addNotificationResponseListener(handler) {
-  return Notifications.addNotificationResponseReceivedListener(handler);
+  // Map Notifee events to the handler format
+  return notifee.onForegroundEvent(({ type, detail }) => {
+    if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
+      handler({
+        notification: {
+          request: {
+            content: {
+              data: detail.notification.data,
+              body: detail.notification.body
+            }
+          }
+        }
+      });
+    }
+  });
 }
 
 export function addNotificationReceivedListener(handler) {
-  return Notifications.addNotificationReceivedListener(handler);
+  // Notifee doesn't have a direct "received" listener in the same way, 
+  // but we can use background events or foreground events.
+  return { remove: () => {} };
 }

@@ -140,12 +140,14 @@ export default function FocusScreen() {
         </Animated.View>
 
         {/* Ring */}
-        <Animated.View entering={FadeIn.delay(100).duration(500)} style={[styles.ringWrap, ringStyle]}>
-          <PomodoroRing progress={progress} phase={phase} size={200} />
-          <View style={styles.ringCenter}>
-            <Text style={[styles.timerText, { color: phaseColor }]}>{timeStr}</Text>
-            <Text style={styles.phaseLabel}>{PHASES[phase].label}</Text>
-          </View>
+        <Animated.View entering={FadeIn.delay(100).duration(500)} style={styles.ringWrap}>
+          <Animated.View style={ringStyle}>
+            <PomodoroRing progress={progress} phase={phase} size={200} />
+            <View style={styles.ringCenter}>
+              <Text style={[styles.timerText, { color: phaseColor }]}>{timeStr}</Text>
+              <Text style={styles.phaseLabel}>{PHASES[phase].label}</Text>
+            </View>
+          </Animated.View>
         </Animated.View>
 
         {/* Announcement */}

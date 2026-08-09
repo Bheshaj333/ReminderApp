@@ -144,42 +144,44 @@ export default function HomeScreen({ navigation }) {
         </Animated.View>
 
         {/* Active Reminder Card */}
-        <Animated.View entering={FadeInDown.delay(150).springify()} style={liveStyle}>
-          <Pressable onPress={() => setShowFullscreen(true)} style={[styles.mainCard, Shadows.md]}>
-            <View style={styles.cardAccent} />
-            <View style={styles.cardBody}>
-              <Text style={styles.cardEyebrow}>{activeReminder ? 'Attention Required' : 'Right now · escalating'}</Text>
-              <Animated.Text style={[styles.cardPhrase, phraseStyle]}>{displayPhrase}</Animated.Text>
-              <EscalationBar currentStep={activeReminder ? (activeReminder.burstIndex ?? 0) + 1 : escStep} />
-              <View style={styles.actionRow}>
-                <PressButton
-                  label="Done"
-                  onPress={() => { 
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); 
-                    if (activeReminder) dismissReminder(activeReminder);
-                  }}
-                  variant="primary"
-                  style={{ flex: 1, backgroundColor: activeReminder ? Colors.deep : Colors.seafoam }}
-                />
-                <PressButton
-                  label="Snooze 5m"
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    if (activeReminder) snoozeReminder(activeReminder);
-                  }}
-                  variant="secondary"
-                />
-                <PressButton
-                  label="Ignore"
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    if (activeReminder) ignoreReminder(activeReminder);
-                  }}
-                  variant="ghost"
-                />
+        <Animated.View entering={FadeInDown.delay(150).springify()}>
+          <Animated.View style={liveStyle}>
+            <Pressable onPress={() => setShowFullscreen(true)} style={[styles.mainCard, Shadows.md]}>
+              <View style={styles.cardAccent} />
+              <View style={styles.cardBody}>
+                <Text style={styles.cardEyebrow}>{activeReminder ? 'Attention Required' : 'Right now · escalating'}</Text>
+                <Animated.Text style={[styles.cardPhrase, phraseStyle]}>{displayPhrase}</Animated.Text>
+                <EscalationBar currentStep={activeReminder ? (activeReminder.burstIndex ?? 0) + 1 : escStep} />
+                <View style={styles.actionRow}>
+                  <PressButton
+                    label="Done"
+                    onPress={() => { 
+                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); 
+                      if (activeReminder) dismissReminder(activeReminder);
+                    }}
+                    variant="primary"
+                    style={{ flex: 1, backgroundColor: activeReminder ? Colors.deep : Colors.seafoam }}
+                  />
+                  <PressButton
+                    label="Snooze 5m"
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      if (activeReminder) snoozeReminder(activeReminder);
+                    }}
+                    variant="secondary"
+                  />
+                  <PressButton
+                    label="Ignore"
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      if (activeReminder) ignoreReminder(activeReminder);
+                    }}
+                    variant="ghost"
+                  />
+                </View>
               </View>
-            </View>
-          </Pressable>
+            </Pressable>
+          </Animated.View>
         </Animated.View>
 
         {/* Quick Add */}
