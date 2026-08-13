@@ -141,9 +141,9 @@ export default function FocusScreen() {
 
         {/* Ring */}
         <Animated.View entering={FadeIn.delay(100).duration(500)} style={styles.ringWrap}>
-          <Animated.View style={ringStyle}>
-            <PomodoroRing progress={progress} phase={phase} size={200} />
-            <View style={styles.ringCenter}>
+          <Animated.View style={[styles.ringContainer, ringStyle]}>
+            <PomodoroRing progress={progress} phase={phase} size={230} color={phaseColor} />
+            <View style={styles.ringCenter} pointerEvents="none">
               <Text style={[styles.timerText, { color: phaseColor }]}>{timeStr}</Text>
               <Text style={styles.phaseLabel}>{PHASES[phase].label}</Text>
             </View>
@@ -241,17 +241,43 @@ const styles = StyleSheet.create({
   title: { fontFamily: 'Georgia', fontSize: 26, fontWeight: '600', color: Colors.deeper },
   cycleText: { fontSize: 13, color: Colors.soft, letterSpacing: 0.3 },
   ringWrap: {
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 8, position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 12,
+  },
+  ringContainer: {
+    width: 230,
+    height: 230,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
   ringCenter: {
-    position: 'absolute', alignItems: 'center',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   timerText: {
-    fontFamily: 'Georgia', fontSize: 52, fontWeight: '500', letterSpacing: -1,
+    fontFamily: 'Georgia',
+    fontSize: 46,
+    fontWeight: '600',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'center',
   },
-  phaseLabel: { fontSize: 12, color: Colors.soft, letterSpacing: 0.6, marginTop: 2 },
-  announcementWrap: { alignItems: 'center', marginBottom: 8, minHeight: 28 },
+  phaseLabel: {
+    fontSize: 12,
+    color: Colors.soft,
+    letterSpacing: 0.8,
+    marginTop: 4,
+    textTransform: 'uppercase',
+    fontWeight: '500',
+  },
+  announcementWrap: { alignItems: 'center', marginBottom: 16, minHeight: 28 },
   announcementText: {
     fontFamily: 'Georgia', fontSize: 15, color: Colors.mid,
     fontStyle: 'italic', textAlign: 'center',

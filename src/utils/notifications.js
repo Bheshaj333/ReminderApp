@@ -174,25 +174,79 @@ export async function cancelAllReminders() {
 }
 
 export function addNotificationResponseListener(handler) {
-  // Map Notifee events to the handler format
-  return notifee.onForegroundEvent(({ type, detail }) => {
-    if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
-      handler({
-        notification: {
-          request: {
-            content: {
-              data: detail.notification.data,
-              body: detail.notification.body
-            }
+  let notifeeUnsubscribe = null;
+  let expoSubscription = null;
+
+  try {
+    if (notifee && typeof notifee.onForegroundEvent === 'function') {
+      notifeeUnsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+        if (type === EventType.PRESS || type === EventType.ACTION_PRESS) {
+          if (detail && detail.notification) {
+            handler({
+              notification: {
+                request: {
+                  content: {
+                    data: detail.notification.data,
+                    body: detail.notification.body,
+                  },
+                },
+              },
+            });
           }
         }
       });
     }
-  });
+  } catch (err) {
+    console.warn('[Notifications] Notifee onForegroundEvent failed:', err);
+  }
+
+  try {
+    if (Notifications && typeof Notifications.addNotificationResponseReceivedListener === 'function') {
+      expoSubscription = Notifications.addNotificationResponseReceivedListener(handler);
+    }
+  } catch (err) {
+    console.warn('[Notifications] Expo addNotificationResponseReceivedListener failed:', err);
+  }
+
+  return {
+    remove: () => {
+      try {
+        if (typeof notifeeUnsubscribe === 'function') {
+          notifeeUnsubscribe();
+        }
+      } catch (e) {}
+
+      try {
+        if (expoSubscription && typeof expoSubscription.remove === 'function') {
+          expoSubscription.remove();
+        } else if (expoSubscription && typeof Notifications.removeNotificationSubscription === 'function') {
+          Notifications.removeNotificationSubscription(expoSubscription);
+        }
+      } catch (e) {}
+    },
+  };
 }
 
 export function addNotificationReceivedListener(handler) {
-  // Notifee doesn't have a direct "received" listener in the same way, 
-  // but we can use background events or foreground events.
-  return { remove: () => {} };
+  let expoSubscription = null;
+
+  try {
+    if (Notifications && typeof Notifications.addNotificationReceivedListener === 'function') {
+      expoSubscription = Notifications.addNotificationReceivedListener(handler);
+    }
+  } catch (err) {
+    console.warn('[Notifications] Expo addNotificationReceivedListener failed:', err);
+  }
+
+  return {
+    remove: () => {
+      try {
+        if (expoSubscription && typeof expoSubscription.remove === 'function') {
+          expoSubscription.remove();
+        } else if (expoSubscription && typeof Notifications.removeNotificationSubscription === 'function') {
+          Notifications.removeNotificationSubscription(expoSubscription);
+        }
+      } catch (e) {}
+    },
+  };
 }

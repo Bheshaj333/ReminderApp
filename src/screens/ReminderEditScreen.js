@@ -327,7 +327,12 @@ export default function ReminderEditScreen({ navigation, route }) {
 
               {/* Mode Selection */}
               <Text style={styles.fieldLabel}>Activity Mode</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modeScroll}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.modeScroll}
+                contentContainerStyle={styles.modeScrollContent}
+              >
                 {MODES.map(mode => {
                   const sel = form.mode === mode;
                   const color = MODE_COLORS[mode];
@@ -335,7 +340,7 @@ export default function ReminderEditScreen({ navigation, route }) {
                     <Pressable
                       key={mode}
                       onPress={() => { setForm(f => ({ ...f, mode })); Haptics.selectionAsync(); }}
-                      style={[styles.modeChip, sel && { backgroundColor: color + '15', borderColor: color }]}
+                      style={[styles.modeChip, sel && { backgroundColor: color + '18', borderColor: color }]}
                     >
                       <Text style={[styles.modeText, sel && { color, fontWeight: '600' }]}>{mode}</Text>
                     </Pressable>
@@ -543,10 +548,21 @@ const styles = StyleSheet.create({
   stepBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   stepVal: { fontSize: 14, fontWeight: '600', color: Colors.ink },
   modeScroll: { marginBottom: 24 },
+  modeScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 4,
+    paddingRight: 10,
+  },
   modeChip: {
-    paddingHorizontal: 20, paddingVertical: 10,
-    backgroundColor: Colors.sea, borderRadius: Radii.full,
-    borderWidth: 0.5, borderColor: Colors.border, marginRight: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    backgroundColor: Colors.white,
+    borderRadius: Radii.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.sm,
   },
   modeText: { fontSize: 13, color: Colors.mid },
   switchesBlock: {

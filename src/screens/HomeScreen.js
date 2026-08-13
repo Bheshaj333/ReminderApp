@@ -205,12 +205,17 @@ export default function HomeScreen({ navigation }) {
         {/* Mode Chips */}
         <Animated.View entering={FadeInDown.delay(300).duration(400)}>
           <Text style={styles.sectionLabel}>Mode</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modeScroll}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.modeScroll}
+            contentContainerStyle={styles.modeScrollContent}
+          >
             {MODES.map((mode, i) => {
               const active = settings.activeMode === mode;
               const color = MODE_COLORS[mode];
               return (
-                <Animated.View key={mode} entering={SlideInRight.delay(i * 60).duration(300)}>
+                <Animated.View key={mode} entering={FadeInDown.delay(300 + i * 40).duration(300)}>
                   <Pressable
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -218,11 +223,11 @@ export default function HomeScreen({ navigation }) {
                     }}
                     style={[
                       styles.modeChip,
-                      active && { backgroundColor: color + '20', borderColor: color },
+                      active && { backgroundColor: color + '18', borderColor: color },
                     ]}
                   >
-                    <Feather name={MODE_ICONS[mode]} size={12} color={active ? color : Colors.soft} />
-                    <Text style={[styles.modeText, active && { color }]}>{mode}</Text>
+                    <Feather name={MODE_ICONS[mode]} size={13} color={active ? color : Colors.soft} />
+                    <Text style={[styles.modeText, active && { color, fontWeight: '600' }]}>{mode}</Text>
                   </Pressable>
                 </Animated.View>
               );
@@ -340,13 +345,26 @@ const styles = StyleSheet.create({
     color: Colors.soft, marginBottom: 10,
   },
   modeScroll: { marginBottom: 20 },
-  modeChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: Colors.white, borderRadius: Radii.full,
-    paddingHorizontal: 14, paddingVertical: 7,
-    borderWidth: 0.5, borderColor: Colors.border, marginRight: 8,
+  modeScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 4,
+    paddingRight: 10,
   },
-  modeText: { fontSize: 12, color: Colors.mid, letterSpacing: 0.3 },
+  modeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.white,
+    borderRadius: Radii.full,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.sm,
+  },
+  modeText: { fontSize: 13, color: Colors.mid, letterSpacing: 0.3 },
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginBottom: 10,

@@ -138,16 +138,24 @@ export function AppProvider({ children }) {
     };
 
     const notifListener = addNotificationReceivedListener(notification => {
-      handleNotification(notification.request.content.data, notification.request.content.body);
+      if (notification?.request?.content?.data) {
+        handleNotification(notification.request.content.data, notification.request.content.body);
+      }
     });
 
     const responseListener = addNotificationResponseListener(response => {
-      handleNotification(response.notification.request.content.data, response.notification.request.content.body);
+      if (response?.notification?.request?.content?.data) {
+        handleNotification(response.notification.request.content.data, response.notification.request.content.body);
+      }
     });
 
     return () => {
-      notifListener.remove();
-      responseListener.remove();
+      if (notifListener && typeof notifListener.remove === 'function') {
+        notifListener.remove();
+      }
+      if (responseListener && typeof responseListener.remove === 'function') {
+        responseListener.remove();
+      }
     };
   }, [state.reminders, state.dismissedOccurrences, state.settings.voiceStyle]);
 

@@ -69,5 +69,13 @@ For the "Alarm" and "Voice" features to work correctly in the background, you mu
 - `npm install`: Install project dependencies.
 - `npx expo install <package-name>`: Install an Expo-compatible package.
 
+### My Commands
+
+cd android
+./gradlew clean
+./gradlew assembleDebug     // This will generate the debug apk file under android/app/build/outputs/apk/debug
+./gradlew assembleRelease 	// this will create the apk of app under android/app/build/outputs/apk/release
+./gradlew bundleRelease     // this will create the aab file under android/app/build/outputs/bundle/release
+
 ---
 Built with ❤️ by Bheshaj.
