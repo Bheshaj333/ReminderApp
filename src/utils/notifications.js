@@ -11,6 +11,12 @@ import * as Device from 'expo-device';
 import * as TaskManager from 'expo-task-manager';
 import { Platform, Linking } from 'react-native';
 import { speak } from './speech';
+import {
+  scheduleNativeAlarm,
+  cancelNativeAlarm,
+  cancelAllNativeAlarms,
+  isNativeAlarmSupported,
+} from './nativeAlarm';
 
 // Existing Background Task for expo-notifications fallback
 const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_NOTIFICATION_TASK';
@@ -50,6 +56,13 @@ export async function scheduleReminder(reminder) {
   const { id, text, scheduledTime, repeatType, repeatInterval, repeatUnit, escalationEnabled, repeatCount, burstInterval, daysOfWeek } = reminder;
   
   await requestPermissions();
+
+  // On Android, use native AlarmManager as the sole authoritative exact alarm engine
+  if (isNativeAlarmSupported) {
+    await scheduleNativeAlarm(reminder);
+    return id;
+  }
+
   const count = repeatCount || 1;
   const burst = burstInterval || 1; 
 
@@ -154,6 +167,9 @@ export async function scheduleReminder(reminder) {
 
 export async function cancelReminder(id) {
   try {
+    if (isNativeAlarmSupported && id) {
+      await cancelNativeAlarm(id);
+    }
     await notifee.cancelNotification(id);
     // Also cancel all with prefix
     const displayed = await notifee.getDisplayedNotifications();
@@ -165,11 +181,14 @@ export async function cancelReminder(id) {
       if (tid.startsWith(`${id}_`)) await notifee.cancelNotification(tid);
     }
   } catch (err) {
-    console.error('[Notifee] Error canceling:', err);
+    console.error('[Notifications] Error canceling:', err);
   }
 }
 
 export async function cancelAllReminders() {
+  if (isNativeAlarmSupported) {
+    await cancelAllNativeAlarms();
+  }
   await notifee.cancelAllNotifications();
 }
 

@@ -4,6 +4,7 @@ import notifee from '@notifee/react-native';
 import { loadReminders, saveReminders, loadSettings, saveSettings, loadDismissals, saveDismissals } from '../utils/storage';
 import { scheduleReminder, cancelReminder, addNotificationReceivedListener, addNotificationResponseListener } from '../utils/notifications';
 import { speak } from '../utils/speech';
+import { stopNativeAlarm, snoozeNativeAlarm, getTriggeredAlarm, isNativeAlarmRunning } from '../utils/nativeAlarm';
 
 const AppContext = createContext(null);
 
@@ -81,23 +82,35 @@ export function AppProvider({ children }) {
         loadDismissals(),
       ]);
       
-      // Check for initial notification from Notifee (Full Screen Intent or Press)
-      const initialNotification = await notifee.getInitialNotification();
       let initialActive = null;
-      if (initialNotification) {
-        const data = initialNotification.notification.data;
-        const reminder = reminders.find(r => r.id === data.reminderId);
+
+      // Check native triggered alarm first
+      const nativeTriggered = await getTriggeredAlarm();
+      if (nativeTriggered && nativeTriggered.id) {
+        const reminder = reminders.find(r => r.id === nativeTriggered.id);
         if (reminder) {
-          initialActive = { ...reminder, ...data };
+          initialActive = { ...reminder, ...nativeTriggered };
         }
-      } else {
-        // Fallback to expo-notifications
-        const lastResponse = await Notifications.getLastNotificationResponseAsync();
-        if (lastResponse) {
-          const data = lastResponse.notification.request.content.data;
+      }
+
+      // Check for initial notification from Notifee (Full Screen Intent or Press)
+      if (!initialActive) {
+        const initialNotification = await notifee.getInitialNotification();
+        if (initialNotification) {
+          const data = initialNotification.notification.data;
           const reminder = reminders.find(r => r.id === data.reminderId);
           if (reminder) {
             initialActive = { ...reminder, ...data };
+          }
+        } else {
+          // Fallback to expo-notifications
+          const lastResponse = await Notifications.getLastNotificationResponseAsync();
+          if (lastResponse) {
+            const data = lastResponse.notification.request.content.data;
+            const reminder = reminders.find(r => r.id === data.reminderId);
+            if (reminder) {
+              initialActive = { ...reminder, ...data };
+            }
           }
         }
       }
@@ -107,7 +120,7 @@ export function AppProvider({ children }) {
         payload: { 
           reminders, 
           settings, 
-          dismissedOccurrences,
+          dismissedOccurrences, 
           activeReminder: initialActive 
         } 
       });
@@ -205,22 +218,25 @@ export function AppProvider({ children }) {
   };
 
   const snoozeReminder = async (reminder) => {
-    const { occurrenceTime } = reminder; 
+    const { occurrenceTime, id } = reminder; 
     if (occurrenceTime && occurrenceTime !== 'once') {
-      dispatch({ type: 'DISMISS_OCCURRENCE', payload: { reminderId: reminder.id, occurrenceTime } });
+      dispatch({ type: 'DISMISS_OCCURRENCE', payload: { reminderId: id, occurrenceTime } });
     }
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
     
+    await snoozeNativeAlarm(id, 5);
+
     const snoozeTime = Date.now() + 5 * 60 * 1000;
     await scheduleReminder({
       ...reminder,
-      id: `${reminder.id}_snooze`,
+      id: `${id}_snooze`,
       repeatType: 'once',
       scheduledTime: snoozeTime,
     });
   };
 
   const ignoreReminder = async (reminder) => {
+    await stopNativeAlarm();
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
   };
 
@@ -231,6 +247,9 @@ export function AppProvider({ children }) {
     }
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
     
+    // Stop native alarm ringing & TTS immediately
+    await stopNativeAlarm();
+
     // Attempt to clear related notifications from the shade using Notifee and Expo
     try {
       await notifee.cancelNotification(id).catch(() => {});
