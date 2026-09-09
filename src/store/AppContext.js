@@ -4,7 +4,14 @@ import notifee from '@notifee/react-native';
 import { loadReminders, saveReminders, loadSettings, saveSettings, loadDismissals, saveDismissals } from '../utils/storage';
 import { scheduleReminder, cancelReminder, addNotificationReceivedListener, addNotificationResponseListener } from '../utils/notifications';
 import { speak } from '../utils/speech';
-import { stopNativeAlarm, snoozeNativeAlarm, getTriggeredAlarm, isNativeAlarmRunning } from '../utils/nativeAlarm';
+import { 
+  stopNativeAlarm, 
+  snoozeNativeAlarm, 
+  getTriggeredAlarm, 
+  isNativeAlarmRunning, 
+  isNativeAlarmSupported,
+  addAlarmTriggerListener 
+} from '../utils/nativeAlarm';
 
 const AppContext = createContext(null);
 
@@ -143,7 +150,7 @@ export function AppProvider({ children }) {
         return;
       }
 
-      if (body) {
+      if (body && !isNativeAlarmSupported) {
         speak(body, state.settings.voiceStyle);
       }
 
@@ -162,12 +169,32 @@ export function AppProvider({ children }) {
       }
     });
 
+    // Native alarm trigger listener
+    const nativeAlarmSub = addAlarmTriggerListener((data) => {
+      const { id, text, burstIndex, burstCount } = data;
+      if (!id) return;
+      const reminder = state.reminders.find(r => r.id === id);
+      dispatch({ 
+        type: 'SET_ACTIVE_REMINDER', 
+        payload: { 
+          ...(reminder || {}), 
+          id, 
+          text: text || reminder?.text, 
+          burstIndex: burstIndex ?? 0,
+          repeatCount: burstCount ?? reminder?.repeatCount ?? 0,
+        } 
+      });
+    });
+
     return () => {
       if (notifListener && typeof notifListener.remove === 'function') {
         notifListener.remove();
       }
       if (responseListener && typeof responseListener.remove === 'function') {
         responseListener.remove();
+      }
+      if (nativeAlarmSub && typeof nativeAlarmSub.remove === 'function') {
+        nativeAlarmSub.remove();
       }
     };
   }, [state.reminders, state.dismissedOccurrences, state.settings.voiceStyle]);
@@ -241,10 +268,16 @@ export function AppProvider({ children }) {
   };
 
   const dismissReminder = async (reminder) => {
-    const { occurrenceTime, repeatCount, id } = reminder;
+    const { occurrenceTime, repeatCount, repeatType, id } = reminder;
     if (occurrenceTime && occurrenceTime !== 'once') {
       dispatch({ type: 'DISMISS_OCCURRENCE', payload: { reminderId: id, occurrenceTime } });
     }
+    
+    // If once reminder, mark inactive
+    if (repeatType === 'once') {
+      dispatch({ type: 'UPDATE_REMINDER', payload: { id, active: false } });
+    }
+
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
     
     // Stop native alarm ringing & TTS immediately

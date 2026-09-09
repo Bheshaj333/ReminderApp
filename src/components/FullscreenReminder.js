@@ -1,29 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Modal, Pressable, Vibration, Animated as RNAnimated
+  View, Text, StyleSheet, Modal, Pressable
 } from 'react-native';
 import Animated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming,
-  runOnJS, withSequence, withRepeat, Easing,
+  withSequence, withRepeat,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Radii, Shadows } from '../utils/theme';
 import PressButton from './PressButton';
 import { speak, stopSpeech } from '../utils/speech';
+import { isNativeAlarmSupported, isNativeAlarmRunning } from '../utils/nativeAlarm';
 
 export default function FullscreenReminder({ visible, reminder, onDone, onSnooze, onIgnore }) {
   const scale = useSharedValue(0.85);
   const opacity = useSharedValue(0);
   const emojiY = useSharedValue(0);
-  const [holdProgress, setHoldProgress] = useState(0);
   const [isRead, setIsRead] = useState(false);
-  const holdInterval = useRef(null);
-  const progressVal = useSharedValue(0);
-  const [remainingRepeats, setRemainingRepeats] = useState(0);
   const isClosing = useRef(false);
   const lastBurstIndex = useRef(-1);
-
   const timeoutRef = useRef(null);
 
   useEffect(() => {
@@ -40,31 +36,49 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
         true
       );
       
-      const count = reminder?.repeatCount || 1;
       const burstIndex = reminder?.burstIndex ?? 0;
-      
-      setRemainingRepeats(count - burstIndex);
       
       if (burstIndex !== lastBurstIndex.current) {
         lastBurstIndex.current = burstIndex;
         setIsRead(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        speak(reminder?.text || 'Reminder', 'default', () => {
-          setIsRead(true);
-          // Auto close after reading finishes so user can see home screen Done button
-          if (timeoutRef.current) clearTimeout(timeoutRef.current);
-          timeoutRef.current = setTimeout(() => {
-            if (!isClosing.current && visible) {
-               onIgnore?.();
-            }
-          }, 4000);
+
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+        // Check if native alarm is actively handling speech on Android
+        isNativeAlarmRunning().then(running => {
+          if (running) {
+            // Native AlarmService is speaking.
+            // Estimate speech time based on word count + 5s action window
+            const words = (reminder?.text || '').split(/\s+/).length;
+            const estimatedSpeechMs = Math.max(2000, words * 400);
+            setTimeout(() => {
+              setIsRead(true);
+            }, estimatedSpeechMs);
+
+            timeoutRef.current = setTimeout(() => {
+              if (!isClosing.current && visible) {
+                onIgnore?.();
+              }
+            }, estimatedSpeechMs + 5000);
+          } else {
+            // Use JS TTS (expo-speech) and wait 5 seconds after speech completes
+            speak(reminder?.text || 'Reminder', 'default', () => {
+              setIsRead(true);
+              if (timeoutRef.current) clearTimeout(timeoutRef.current);
+              timeoutRef.current = setTimeout(() => {
+                if (!isClosing.current && visible) {
+                  onIgnore?.();
+                }
+              }, 5000); // 5 seconds after message finished being read
+            });
+          }
         });
       }
     } else {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       opacity.value = withTiming(0, { duration: 200 });
       scale.value = withTiming(0.9, { duration: 200 });
-      progressVal.value = 0;
       lastBurstIndex.current = -1;
       setIsRead(false);
       stopSpeech();
@@ -79,6 +93,7 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
      if (isClosing.current) return;
      stopSpeech();
      isClosing.current = true;
+     if (timeoutRef.current) clearTimeout(timeoutRef.current);
      onSnooze?.();
   };
 
@@ -86,6 +101,7 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
      if (isClosing.current) return;
      stopSpeech();
      isClosing.current = true;
+     if (timeoutRef.current) clearTimeout(timeoutRef.current);
      onIgnore?.();
   };
 
@@ -93,6 +109,7 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
      if (isClosing.current) return;
      stopSpeech();
      isClosing.current = true;
+     if (timeoutRef.current) clearTimeout(timeoutRef.current);
      onDone?.();
   };
 
@@ -103,30 +120,6 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
   const emojiStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: emojiY.value }],
   }));
-  const progressBarStyle = useAnimatedStyle(() => ({
-    width: `${progressVal.value * 100}%`,
-  }));
-
-  const startHold = () => {
-    if (isRead) return; // No hold needed if already read
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    let progress = 0;
-    holdInterval.current = setInterval(() => {
-      progress += 4;
-      setHoldProgress(Math.min(100, progress));
-      if (progress >= 100) {
-        clearInterval(holdInterval.current);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        handleDoneAction();
-        setHoldProgress(0);
-      }
-    }, 40);
-  };
-
-  const stopHold = () => {
-    clearInterval(holdInterval.current);
-    setHoldProgress(0);
-  };
 
   const icons = { water: '💧', stretch: '🧘', vitamins: '💊', focus: '🎯', break: '☕', default: '🔔' };
   const emoji = reminder?.icon ? icons[reminder.icon] || icons.default : icons.default;
@@ -138,6 +131,9 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
     'Tiny habits, lasting change.',
   ];
   const quote = motivational[Math.floor((reminder?.id?.charCodeAt(0) || 0) % motivational.length)];
+
+  const totalSteps = (reminder?.repeatCount || 0) + 1;
+  const currentStep = Math.min((reminder?.burstIndex ?? 0) + 1, totalSteps);
 
   return (
     <Modal
@@ -153,50 +149,39 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
 
         <Animated.View style={[styles.card, cardStyle, Shadows.lg]}>
           <View style={styles.repeatBadge}>
-             <Text style={styles.repeatBadgeText}>Step {(reminder?.burstIndex ?? 0) + 1} of {reminder?.repeatCount || 1}</Text>
+             <Text style={styles.repeatBadgeText}>
+               {totalSteps > 1 ? `Step ${currentStep} of ${totalSteps}` : 'Reminder'}
+             </Text>
           </View>
           <Animated.Text style={[styles.emoji, emojiStyle]}>{emoji}</Animated.Text>
 
           <Text style={styles.heading}>{reminder?.text || 'Time for a reminder.'}</Text>
           <Text style={styles.quote}>{quote}</Text>
 
-          {/* Action Button: Hold to shut down OR Tap Done */}
-          <View style={styles.holdWrap}>
-            <Pressable
-              onPress={isRead ? handleDoneAction : undefined}
-              onPressIn={!isRead ? startHold : undefined}
-              onPressOut={!isRead ? stopHold : undefined}
-              style={[
-                styles.holdBtn, 
-                { overflow: 'hidden' },
-                isRead && { backgroundColor: Colors.deep, borderColor: Colors.deeper, borderWidth: 1 }
-              ]}
-            >
-              {!isRead && <View style={[styles.holdFill, { width: `${holdProgress}%` }]} />}
-              <Text style={[styles.holdLabel, isRead && { color: Colors.white, fontWeight: '700' }]}>
-                {isRead ? 'Done' : (holdProgress > 0 ? `${Math.round(holdProgress)}%` : 'Hold to shut down')}
-              </Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.actionRow}>
+          {/* Action Button: Tap Done */}
+          <View style={styles.actionBlock}>
             <PressButton
-              label="Snooze 5m"
-              onPress={handleSnooze}
-              variant="secondary"
-              style={{ flex: 1 }}
+              label="Done"
+              onPress={handleDoneAction}
+              variant="primary"
+              size="lg"
+              style={{ width: '100%', marginBottom: 12, backgroundColor: Colors.deep }}
             />
-            <PressButton
-              label="Ignore"
-              onPress={handleIgnore}
-              variant="ghost"
-              style={{ flex: 1 }}
-            />
-          </View>
 
-          {/* Progress strip */}
-          <View style={styles.progressTrack}>
-            <Animated.View style={[styles.progressFill, progressBarStyle]} />
+            <View style={styles.actionRow}>
+              <PressButton
+                label="Snooze 5m"
+                onPress={handleSnooze}
+                variant="secondary"
+                style={{ flex: 1 }}
+              />
+              <PressButton
+                label="Ignore"
+                onPress={handleIgnore}
+                variant="ghost"
+                style={{ flex: 1 }}
+              />
+            </View>
           </View>
         </Animated.View>
       </Animated.View>
@@ -264,31 +249,9 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginBottom: 32,
   },
-  holdWrap: {
+  actionBlock: {
     width: '100%',
-    marginBottom: 12,
-  },
-  holdBtn: {
-    width: '100%',
-    backgroundColor: Colors.sea,
-    borderRadius: Radii.md,
-    paddingVertical: 16,
-    alignItems: 'center',
-    borderWidth: 0.5,
-    borderColor: Colors.seafoam,
-    position: 'relative',
-  },
-  holdFill: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: Colors.seafoam,
-    borderRadius: Radii.md,
-  },
-  holdLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.deeper,
-    zIndex: 1,
-    letterSpacing: 0.3,
+    marginTop: 8,
   },
   actionRow: {
     flexDirection: 'row',

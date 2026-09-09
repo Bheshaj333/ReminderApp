@@ -1,8 +1,19 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 
 const { AlarmModule } = NativeModules;
 
 export const isNativeAlarmSupported = Platform.OS === 'android' && !!AlarmModule;
+
+const alarmEmitter = isNativeAlarmSupported ? new NativeEventEmitter(AlarmModule) : null;
+
+/**
+ * Add a listener for native alarm triggers.
+ */
+export function addAlarmTriggerListener(callback) {
+  if (!alarmEmitter) return { remove: () => {} };
+  const subscription = alarmEmitter.addListener('onAlarmTriggered', callback);
+  return subscription;
+}
 
 /**
  * Schedule a native exact alarm with speech announcement.
@@ -18,8 +29,9 @@ export async function scheduleNativeAlarm(reminder) {
       repeatType: String(reminder.repeatType || 'once'),
       repeatInterval: Number(reminder.repeatInterval || 1),
       repeatUnit: String(reminder.repeatUnit || 'hours'),
-      repeatCount: Number(reminder.repeatCount || 1),
-      burstInterval: Number(reminder.burstInterval || 1),
+      daysOfWeek: Array.isArray(reminder.daysOfWeek) ? reminder.daysOfWeek : [],
+      repeatCount: Number(reminder.repeatCount ?? 0),
+      burstInterval: Number(reminder.burstInterval ?? 0),
       voiceStyle: String(reminder.voiceStyle || 'default'),
       escalation: Boolean(reminder.escalation ?? true),
       active: Boolean(reminder.active ?? true),

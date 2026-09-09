@@ -63,8 +63,8 @@ export async function scheduleReminder(reminder) {
     return id;
   }
 
-  const count = repeatCount || 1;
-  const burst = burstInterval || 1; 
+  const count = Number(repeatCount ?? 0);
+  const burst = (Number(burstInterval ?? 0) > 0) ? Number(burstInterval) : 1; 
 
   await cancelReminder(id);
 
@@ -120,7 +120,7 @@ export async function scheduleReminder(reminder) {
 
   if (repeatType === 'once' && scheduledTime) {
     const baseDate = ensureFuture(scheduledTime);
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i <= count; i++) {
       const time = baseDate + (i * burst * 60 * 1000);
       await scheduleOneNotifee(`${id}_${i}`, time, i, `once_${baseDate}`);
     }
@@ -130,7 +130,7 @@ export async function scheduleReminder(reminder) {
     const minute = baseDate.getMinutes();
     const baseOccTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
     
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i <= count; i++) {
       let time = new Date();
       time.setHours(hour, minute + (i * burst), 0, 0);
       if (time.getTime() <= now) {
@@ -152,7 +152,7 @@ export async function scheduleReminder(reminder) {
         if (distance === 0 && time.getTime() <= now) distance = 7;
         time.setDate(time.getDate() + distance);
 
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i <= count; i++) {
           const burstTime = new Date(time.getTime() + (i * burst * 60 * 1000));
           await scheduleOneNotifee(`${id}_${prefix}_${i}`, burstTime.getTime(), i, `weekend_${prefix}`, true);
         }

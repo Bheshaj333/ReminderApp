@@ -42,8 +42,8 @@ export default function ReminderEditScreen({ navigation, route }) {
     repeatInterval: 1,
     repeatUnit: 'hours',
     daysOfWeek: [],
-    repeatCount: 1,
-    burstInterval: 1,
+    repeatCount: 0,
+    burstInterval: 0,
     mode: 'Focus',
     escalation: true,
     untilDone: true,
@@ -62,6 +62,8 @@ export default function ReminderEditScreen({ navigation, route }) {
         ...editReminder,
         scheduledTime: editReminder.scheduledTime || Date.now(),
         daysOfWeek: editReminder.daysOfWeek || [],
+        repeatCount: editReminder.repeatCount ?? 0,
+        burstInterval: editReminder.burstInterval ?? 0,
       });
       setIntervalInput(String(editReminder.repeatInterval || 1));
     }
@@ -302,11 +304,11 @@ export default function ReminderEditScreen({ navigation, route }) {
                  <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Repeat Count</Text>
                     <View style={styles.stepControl}>
-                      <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.max(1, f.repeatCount - 1) }))} style={styles.stepBtn}>
+                      <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.max(0, f.repeatCount - 1) }))} style={styles.stepBtn}>
                         <Feather name="minus" size={14} color={Colors.mid} />
                       </Pressable>
                       <Text style={styles.stepVal}>{form.repeatCount}x</Text>
-                      <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.min(10, f.repeatCount + 1) }))} style={styles.stepBtn}>
+                      <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.min(10, f.repeatCount + 1), burstInterval: f.burstInterval === 0 ? 1 : f.burstInterval }))} style={styles.stepBtn}>
                         <Feather name="plus" size={14} color={Colors.mid} />
                       </Pressable>
                     </View>
@@ -314,7 +316,7 @@ export default function ReminderEditScreen({ navigation, route }) {
                  <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Burst (Mins)</Text>
                     <View style={styles.stepControl}>
-                      <Pressable onPress={() => setForm(f => ({ ...f, burstInterval: Math.max(1, f.burstInterval - 1) }))} style={styles.stepBtn}>
+                      <Pressable onPress={() => setForm(f => ({ ...f, burstInterval: Math.max(0, f.burstInterval - 1) }))} style={styles.stepBtn}>
                         <Feather name="minus" size={14} color={Colors.mid} />
                       </Pressable>
                       <Text style={styles.stepVal}>{form.burstInterval}m</Text>

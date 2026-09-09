@@ -27,8 +27,8 @@ const defaultForm = () => ({
   repeatType: 'daily', // once | daily | weekend | custom
   repeatInterval: 1, 
   repeatUnit: 'hours', // minutes | hours | days
-  repeatCount: 1, 
-  burstInterval: 1, 
+  repeatCount: 0, 
+  burstInterval: 0, 
   mode: 'Focus',
   escalation: true,
   untilDone: true,
