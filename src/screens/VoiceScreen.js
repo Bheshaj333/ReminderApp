@@ -1,248 +1,250 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, StatusBar } from 'react-native';
+import React, { useEffect, useState, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, StatusBar, TextInput, Switch, ActivityIndicator } from 'react-native';
 import Animated, {
-  FadeIn, FadeInDown, useSharedValue, useAnimatedStyle,
-  withRepeat, withSequence, withTiming, withSpring, Easing,
+  FadeIn, useSharedValue, useAnimatedStyle, withRepeat, withTiming, withDelay, withSequence, Easing, cancelAnimation,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
-import { Colors, Radii, Shadows, VOICE_PHRASES } from '../utils/theme';
+import { Colors, Radii, Shadows } from '../utils/theme';
 import { useApp } from '../store/AppContext';
-import PressButton from '../components/PressButton';
+import { speak, stopSpeech, getVoiceGroups, RATE_OPTIONS, PITCH_OPTIONS } from '../utils/speech';
 
-const VOICE_OPTIONS = [
-  { id: 'default', label: 'Default', desc: 'Clean system TTS', icon: 'cpu' },
-  { id: 'gentle', label: 'Gentle', desc: '"Hey, just a nudge."', icon: 'smile' },
-  { id: 'firm', label: 'Firm', desc: '"Get it done. Now."', icon: 'alert-circle' },
-  { id: 'own', label: 'Your voice', desc: 'Record yourself', icon: 'mic' },
-  { id: 'someone', label: 'Someone else', desc: 'Upload audio', icon: 'heart' },
-];
+function deviceLocale() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale || 'en-US';
+  } catch (e) {
+    return 'en-US';
+  }
+}
 
-const SAMPLE_PHRASES = [
-  { key: 'water', phrases: ['Drink some water.', 'Hydration check.', 'Your body needs water.'] },
-  { key: 'stretch', phrases: ['Stand up and stretch.', 'Time to move.', 'Get off your chair.'] },
-  { key: 'breathe', phrases: ['Take a deep breath.', 'Pause. Breathe.', 'One slow breath.'] },
-];
+function WaveBar({ index, active }) {
+  const h = useSharedValue(0.3);
+  useEffect(() => {
+    if (active) {
+      h.value = withDelay(index * 90, withRepeat(withSequence(
+        withTiming(1, { duration: 260, easing: Easing.inOut(Easing.quad) }),
+        withTiming(0.25, { duration: 260, easing: Easing.inOut(Easing.quad) }),
+      ), -1));
+    } else {
+      cancelAnimation(h);
+      h.value = withTiming(0.3, { duration: 200 });
+    }
+  }, [active]);
+  const style = useAnimatedStyle(() => ({ transform: [{ scaleY: h.value }] }));
+  return <Animated.View style={[styles.bar, style]} />;
+}
+
+function Choice({ options, value, onChange }) {
+  return (
+    <View style={styles.segment}>
+      {options.map(o => {
+        const sel = Math.abs(o.value - value) < 0.01;
+        return (
+          <Pressable key={o.label} onPress={() => onChange(o.value)} style={[styles.seg, sel && styles.segSel]}>
+            <Text style={[styles.segText, sel && styles.segTextSel]}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 export default function VoiceScreen() {
   const { state, updateSettings } = useApp();
-  const [recording, setRecording] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState(state.settings.voiceStyle || 'default');
-  const [expandedSet, setExpandedSet] = useState(null);
-
-  const orbScale = useSharedValue(1);
-  const orbRingScale = useSharedValue(1);
-  const waveOpacity1 = useSharedValue(0);
-  const waveOpacity2 = useSharedValue(0);
-  const waveOpacity3 = useSharedValue(0);
+  const { settings } = state;
+  const [phrase, setPhrase] = useState('Time to take your medicine.');
+  const [speaking, setSpeaking] = useState(false);
+  const [groups, setGroups] = useState(null);
+  const [lang, setLang] = useState(null);
 
   useEffect(() => {
-    if (recording) {
-      // Orb pulse
-      orbScale.value = withRepeat(
-        withSequence(
-          withTiming(1.08, { duration: 600 }),
-          withTiming(1, { duration: 600 })
-        ), -1, true
-      );
-      // Expanding waves
-      const waveDelay = (sv, delay) => {
-        sv.value = withRepeat(
-          withSequence(
-            withTiming(0, { duration: 0 }),
-            withTiming(0.6, { duration: delay * 0.3 }),
-            withTiming(0, { duration: delay * 0.7 })
-          ), -1, false
-        );
-      };
-      setTimeout(() => waveDelay(waveOpacity1, 1400), 0);
-      setTimeout(() => waveDelay(waveOpacity2, 1400), 350);
-      setTimeout(() => waveDelay(waveOpacity3, 1400), 700);
-    } else {
-      orbScale.value = withSpring(1);
-      waveOpacity1.value = withTiming(0, { duration: 300 });
-      waveOpacity2.value = withTiming(0, { duration: 300 });
-      waveOpacity3.value = withTiming(0, { duration: 300 });
-    }
-  }, [recording]);
+    getVoiceGroups().then(g => {
+      setGroups(g);
+      // Start on the language of the chosen voice, else the phone's language
+      const chosen = g.find(x => x.voices.some(v => v.id === settings.voiceId));
+      const deviceTag = deviceLocale();
+      const device = g.find(x => x.lang === deviceTag) || g.find(x => x.lang.startsWith(deviceTag.split('-')[0]));
+      setLang((chosen || device || g[0])?.lang ?? null);
+    });
+    return () => stopSpeech();
+  }, []);
 
-  const orbStyle = useAnimatedStyle(() => ({ transform: [{ scale: orbScale.value }] }));
-  const w1Style = useAnimatedStyle(() => ({ opacity: waveOpacity1.value }));
-  const w2Style = useAnimatedStyle(() => ({ opacity: waveOpacity2.value }));
-  const w3Style = useAnimatedStyle(() => ({ opacity: waveOpacity3.value }));
-
-  const toggleRecord = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setRecording(r => !r);
+  const play = (overrides = {}) => {
+    stopSpeech();
+    setSpeaking(true);
+    speak(phrase.trim() || 'This is how your reminders will sound.', { ...settings, ...overrides }, {
+      onDone: () => setSpeaking(false),
+    });
   };
 
-  const selectVoice = (id) => {
+  const change = (patch) => {
     Haptics.selectionAsync();
-    setSelectedVoice(id);
-    updateSettings({ voiceStyle: id });
+    updateSettings(patch);
+    play(patch);
   };
+
+  const group = useMemo(() => groups?.find(g => g.lang === lang), [groups, lang]);
+  // Show the most useful languages first: device language family, then English
+  const langs = useMemo(() => {
+    if (!groups) return [];
+    const base = deviceLocale().split('-')[0];
+    const score = g => (g.lang.startsWith(base) ? 0 : g.lang.startsWith('en') ? 1 : 2);
+    return [...groups].sort((a, b) => score(a) - score(b) || a.label.localeCompare(b.label));
+  }, [groups]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.mist} />
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <Animated.View entering={FadeIn.duration(300)}>
           <Text style={styles.title}>Voice</Text>
-          <Text style={styles.subtitle}>Make reminders feel personal</Text>
+          <Text style={styles.subtitle}>How your reminders sound when they ring</Text>
         </Animated.View>
 
-        {/* Orb */}
-        <Animated.View entering={FadeIn.delay(100).duration(500)} style={styles.orbSection}>
-          {/* Expanding rings */}
-          <Animated.View style={[styles.wave, styles.wave3, w3Style]} />
-          <Animated.View style={[styles.wave, styles.wave2, w2Style]} />
-          <Animated.View style={[styles.wave, styles.wave1, w1Style]} />
-          <Animated.View style={orbStyle}>
+        {/* Preview */}
+        <LinearGradient colors={['#0B2421', '#1A4A40', '#2D6B5F']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.preview, Shadows.md]}>
+          <Text style={styles.previewLabel}>TRY IT</Text>
+          <TextInput
+            style={styles.previewInput}
+            value={phrase}
+            onChangeText={setPhrase}
+            multiline
+            placeholder="Type something to hear"
+            placeholderTextColor="rgba(255,255,255,0.4)"
+          />
+          <View style={styles.previewRow}>
+            <View style={styles.wave}>
+              {Array.from({ length: 14 }).map((_, i) => <WaveBar key={i} index={i % 7} active={speaking} />)}
+            </View>
             <Pressable
-              onPress={toggleRecord}
-              style={[styles.orb, recording && styles.orbActive]}
+              onPress={() => (speaking ? (stopSpeech(), setSpeaking(false)) : play())}
+              style={({ pressed }) => [styles.playBtn, pressed && { transform: [{ scale: 0.94 }] }]}
             >
-              <Feather
-                name={recording ? 'mic' : 'mic-off'}
-                size={32}
-                color={recording ? Colors.white : Colors.mid}
+              <Feather name={speaking ? 'square' : 'play'} size={22} color="#0B2421" style={!speaking && { marginLeft: 3 }} />
+            </Pressable>
+          </View>
+        </LinearGradient>
+
+        {/* Tone */}
+        <Text style={styles.section}>Speed</Text>
+        <Choice options={RATE_OPTIONS} value={settings.rate ?? 0.95} onChange={v => change({ rate: v })} />
+        <Text style={styles.section}>Pitch</Text>
+        <Choice options={PITCH_OPTIONS} value={settings.pitch ?? 1} onChange={v => change({ pitch: v })} />
+
+        <View style={[styles.card, styles.toggleRow, Shadows.sm]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowTitle}>Say “Reminder” first</Text>
+            <Text style={styles.rowDesc}>“Reminder. Take your medicine.”</Text>
+          </View>
+          <Switch
+            value={!!settings.announcePrefix}
+            onValueChange={v => change({ announcePrefix: v })}
+            trackColor={{ false: Colors.sea2, true: Colors.seafoam }}
+            thumbColor={Colors.white}
+          />
+        </View>
+
+        {/* Voices */}
+        <Text style={styles.section}>Voice</Text>
+        {!groups ? (
+          <ActivityIndicator color={Colors.seafoam} style={{ marginTop: 20 }} />
+        ) : groups.length === 0 ? (
+          <Text style={styles.note}>No text-to-speech voices found. Install “Speech Services by Google” from the Play Store.</Text>
+        ) : (
+          <>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.langRow}>
+              {langs.map(g => {
+                const sel = g.lang === lang;
+                return (
+                  <Pressable key={g.lang} onPress={() => { Haptics.selectionAsync(); setLang(g.lang); }} style={[styles.lang, sel && styles.langSel]}>
+                    <Text style={[styles.langText, sel && styles.langTextSel]}>{g.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <View style={[styles.card, Shadows.sm]}>
+              <VoiceRow
+                label="Phone default"
+                desc="Uses your phone's text-to-speech setting"
+                selected={!settings.voiceId}
+                onPress={() => change({ voiceId: null })}
               />
-            </Pressable>
-          </Animated.View>
-          <Text style={styles.orbLabel}>
-            {recording ? 'Recording… tap to stop' : 'Tap orb to record'}
-          </Text>
-        </Animated.View>
-
-        {/* Voice Options */}
-        <Animated.View entering={FadeInDown.delay(200).duration(400)}>
-          <Text style={styles.sectionLabel}>Voice style</Text>
-          {VOICE_OPTIONS.map((opt, i) => {
-            const sel = selectedVoice === opt.id;
-            return (
-              <Animated.View key={opt.id} entering={FadeInDown.delay(i * 60)}>
-                <Pressable
-                  onPress={() => selectVoice(opt.id)}
-                  style={[styles.voiceRow, sel && styles.voiceRowSel]}
-                >
-                  <View style={[styles.voiceIco, sel && { backgroundColor: Colors.seafoam + '20' }]}>
-                    <Feather name={opt.icon} size={16} color={sel ? Colors.seafoam : Colors.mid} />
-                  </View>
-                  <View style={styles.voiceInfo}>
-                    <Text style={[styles.voiceLabel, sel && { color: Colors.deep }]}>{opt.label}</Text>
-                    <Text style={styles.voiceDesc}>{opt.desc}</Text>
-                  </View>
-                  {sel && (
-                    <View style={styles.checkWrap}>
-                      <Feather name="check" size={14} color={Colors.seafoam} />
-                    </View>
-                  )}
-                  {(opt.id === 'own' || opt.id === 'someone') && (
-                    <Feather name="chevron-right" size={14} color={Colors.soft} />
-                  )}
-                </Pressable>
-              </Animated.View>
-            );
-          })}
-        </Animated.View>
-
-        {/* Phrase Variation Preview */}
-        <Animated.View entering={FadeInDown.delay(350).duration(400)} style={{ marginTop: 8 }}>
-          <Text style={styles.sectionLabel}>Phrase variation preview</Text>
-          <Text style={styles.phraseNote}>
-            Randomized phrasing reduces habituation — your brain stays alert.
-          </Text>
-
-          {SAMPLE_PHRASES.map((set, si) => (
-            <Pressable
-              key={set.key}
-              onPress={() => { setExpandedSet(expandedSet === set.key ? null : set.key); Haptics.selectionAsync(); }}
-              style={[styles.phraseGroup, Shadows.sm]}
-            >
-              <View style={styles.phraseGroupHeader}>
-                <Text style={styles.phraseGroupKey}>{set.key}</Text>
-                <Feather
-                  name={expandedSet === set.key ? 'chevron-up' : 'chevron-down'}
-                  size={14} color={Colors.soft}
+              {group?.voices.map(v => (
+                <VoiceRow
+                  key={v.id}
+                  label={v.label}
+                  desc={v.online ? 'Needs internet · higher quality' : 'Works offline'}
+                  badge={v.online ? 'wifi' : null}
+                  selected={settings.voiceId === v.id}
+                  onPress={() => change({ voiceId: v.id })}
+                  border
                 />
-              </View>
-              {expandedSet === set.key && set.phrases.map((p, pi) => (
-                <Animated.View key={pi} entering={FadeInDown.delay(pi * 50)} style={styles.phraseItem}>
-                  <View style={styles.phraseDot} />
-                  <Text style={styles.phraseText}>{p}</Text>
-                </Animated.View>
               ))}
-            </Pressable>
-          ))}
-        </Animated.View>
-
-        <View style={{ height: 100 }} />
+            </View>
+            <Text style={styles.note}>Tap a voice to hear it. Your choice is used for every reminder.</Text>
+          </>
+        )}
+        <View style={{ height: 120 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+function VoiceRow({ label, desc, selected, onPress, border, badge }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.voiceRow, border && styles.border, pressed && { backgroundColor: Colors.sea }]}>
+      <View style={[styles.radio, selected && styles.radioSel]}>
+        {selected && <View style={styles.radioDot} />}
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.rowTitle, selected && { color: Colors.deep }]}>{label}</Text>
+        <Text style={styles.rowDesc}>{desc}</Text>
+      </View>
+      {badge && <Feather name={badge} size={14} color={Colors.soft} />}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.mist },
-  content: { padding: 20 },
-  header: { marginBottom: 28 },
-  title: { fontFamily: 'Georgia', fontSize: 26, fontWeight: '600', color: Colors.deeper },
-  subtitle: { fontSize: 13, color: Colors.soft, marginTop: 3, letterSpacing: 0.3 },
-  orbSection: { alignItems: 'center', marginBottom: 36, position: 'relative', paddingVertical: 20 },
-  wave: {
-    position: 'absolute', borderRadius: 999,
-    borderWidth: 1, borderColor: Colors.seafoam,
-  },
-  wave1: { width: 120, height: 120 },
-  wave2: { width: 160, height: 160 },
-  wave3: { width: 200, height: 200 },
-  orb: {
-    width: 88, height: 88, borderRadius: 44,
-    backgroundColor: Colors.sea, borderWidth: 0.5, borderColor: Colors.sea3,
-    alignItems: 'center', justifyContent: 'center',
-    ...Shadows.md,
-  },
-  orbActive: { backgroundColor: Colors.seafoam, borderColor: Colors.seafoam },
-  orbLabel: { marginTop: 16, fontSize: 13, color: Colors.mid, letterSpacing: 0.4 },
-  sectionLabel: {
-    fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
-    color: Colors.soft, marginBottom: 12,
-  },
-  voiceRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: Colors.white, borderRadius: Radii.lg,
-    padding: 14, marginBottom: 8,
-    borderWidth: 0.5, borderColor: Colors.border,
-    ...Shadows.sm,
-  },
-  voiceRowSel: { borderColor: Colors.seafoam, backgroundColor: Colors.sea },
-  voiceIco: {
-    width: 36, height: 36, borderRadius: Radii.sm,
-    backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center',
-  },
-  voiceInfo: { flex: 1 },
-  voiceLabel: { fontSize: 14, fontWeight: '400', color: Colors.ink, marginBottom: 2 },
-  voiceDesc: { fontSize: 12, color: Colors.soft },
-  checkWrap: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: Colors.seafoam + '20', alignItems: 'center', justifyContent: 'center',
-  },
-  phraseNote: { fontSize: 13, color: Colors.mid, lineHeight: 20, marginBottom: 12 },
-  phraseGroup: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg,
-    padding: 14, marginBottom: 8, borderWidth: 0.5, borderColor: Colors.border,
-  },
-  phraseGroupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  phraseGroupKey: {
-    fontSize: 13, fontWeight: '500', color: Colors.ink,
-    textTransform: 'capitalize', letterSpacing: 0.3,
-  },
-  phraseItem: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingTop: 10, paddingLeft: 4,
-  },
-  phraseDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: Colors.seafoam },
-  phraseText: { fontSize: 14, color: Colors.mid, fontStyle: 'italic' },
+  content: { paddingHorizontal: 20, paddingTop: 12 },
+  title: { fontFamily: 'Georgia', fontSize: 28, fontWeight: '600', color: Colors.deeper },
+  subtitle: { fontSize: 13, color: Colors.mid, marginTop: 2, marginBottom: 18 },
+
+  preview: { borderRadius: 26, padding: 20 },
+  previewLabel: { fontSize: 11, letterSpacing: 3, color: 'rgba(168,240,220,0.8)', fontWeight: '700' },
+  previewInput: { color: '#fff', fontFamily: 'Georgia', fontSize: 22, lineHeight: 30, marginTop: 10, padding: 0, minHeight: 60 },
+  previewRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
+  wave: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 36 },
+  bar: { width: 4, height: 32, borderRadius: 2, backgroundColor: '#78E8C8' },
+  playBtn: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#A8F0DC', alignItems: 'center', justifyContent: 'center' },
+
+  section: { fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase', color: Colors.mid, fontWeight: '700', marginTop: 24, marginBottom: 10 },
+  segment: { flexDirection: 'row', padding: 4, backgroundColor: Colors.sea, borderRadius: Radii.full },
+  seg: { flex: 1, height: 40, borderRadius: Radii.full, alignItems: 'center', justifyContent: 'center' },
+  segSel: { backgroundColor: Colors.white, ...Shadows.sm },
+  segText: { fontSize: 14, color: Colors.mid, fontWeight: '600' },
+  segTextSel: { color: Colors.deeper },
+
+  card: { backgroundColor: Colors.white, borderRadius: 20, borderWidth: 1, borderColor: Colors.borderLight, overflow: 'hidden' },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', padding: 16, marginTop: 16 },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: Colors.ink },
+  rowDesc: { fontSize: 12, color: Colors.soft, marginTop: 2 },
+
+  langRow: { gap: 8, paddingBottom: 12, paddingRight: 20 },
+  lang: { height: 36, paddingHorizontal: 14, borderRadius: Radii.full, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.borderLight, justifyContent: 'center' },
+  langSel: { backgroundColor: Colors.deep, borderColor: Colors.deep },
+  langText: { fontSize: 13, fontWeight: '600', color: Colors.mid },
+  langTextSel: { color: Colors.white },
+
+  voiceRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  border: { borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: Colors.sea3, alignItems: 'center', justifyContent: 'center' },
+  radioSel: { borderColor: Colors.deep },
+  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.deep },
+  note: { fontSize: 12, color: Colors.soft, marginTop: 10, lineHeight: 17 },
 });

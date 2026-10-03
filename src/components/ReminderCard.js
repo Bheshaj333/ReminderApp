@@ -1,204 +1,89 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { View, Text, StyleSheet, Switch, Pressable } from 'react-native';
-import Animated, {
-  useSharedValue, useAnimatedStyle, withSpring, withTiming,
-} from 'react-native-reanimated';
-import { Colors, Radii, Shadows, Typography } from '../utils/theme';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
-const MODE_COLORS = {
-  Focus: Colors.seafoam,
-  Health: Colors.coral,
-  Study: Colors.petalDeep,
-  Sleep: Colors.deep,
-  Gym: Colors.jasmineDark,
-  default: Colors.seafoam,
-};
+import { Colors, Radii, Shadows } from '../utils/theme';
+import { getCategory } from '../utils/categories';
+import { nextOccurrence, describeRepeat, describeBurst, formatWhen } from '../utils/schedule';
 
-const REPEAT_LABELS = {
-  once: 'Once',
-  daily: 'Daily',
-  custom: 'Every',
-};
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-export default function ReminderCard({ reminder, onToggle, onDelete, onEdit, onTap }) {
+function ReminderCard({ reminder, onToggle, onPress }) {
   const scale = useSharedValue(1);
-  const deleteOpacity = useSharedValue(0);
+  const pressStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
-  const pressIn = () => {
-    scale.value = withSpring(0.97, { damping: 20, stiffness: 300 });
-  };
-  const pressOut = () => {
-    scale.value = withSpring(1, { damping: 20, stiffness: 300 });
-  };
-
-  const cardStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const accentColor = MODE_COLORS[reminder.mode] || MODE_COLORS.default;
+  const cat = getCategory(reminder.category);
   const isOn = reminder.active;
-
-  const handleToggle = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onToggle?.(reminder.id);
-  };
-
-  const getRepeatText = () => {
-    if (reminder.repeatType === 'daily') return 'Daily';
-    if (reminder.repeatType === 'weekend') return 'Weekends';
-    if (reminder.repeatType === 'once') return 'Once';
-    if (reminder.repeatType === 'custom') {
-      const unit = reminder.repeatUnit || 'hours';
-      const interval = reminder.repeatInterval || 1;
-      let unitLabel = interval === 1 ? unit.slice(0, -1) : unit;
-      if (unit === 'years' && interval === 1) unitLabel = 'year';
-      
-      let text = `Every ${interval} ${unitLabel}`;
-      
-      if (unit === 'weeks' && reminder.daysOfWeek && reminder.daysOfWeek.length > 0) {
-        const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        const days = reminder.daysOfWeek.map(d => dayLabels[d - 1]).join(', ');
-        text += ` on ${days}`;
-      }
-      
-      return text;
-    }
-    return 'Once';
-  };
-
-  const repeatText = getRepeatText();
-
-  const timeStr = reminder.scheduledTime
-    ? new Date(reminder.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : null;
+  const next = isOn ? nextOccurrence(reminder) : null;
+  const burst = describeBurst(reminder);
 
   return (
-    <Animated.View style={[cardStyle]}>
-      <Pressable
-        onPressIn={pressIn}
-        onPressOut={pressOut}
-        onPress={() => onTap?.(reminder)}
-        onLongPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onEdit?.(reminder); }}
-        style={[styles.card, Shadows.sm, !isOn && styles.cardOff]}
-      >
-        <View style={[styles.accent, { backgroundColor: isOn ? accentColor : Colors.border }]} />
+    <AnimatedPressable
+      onPress={() => onPress?.(reminder)}
+      onPressIn={() => { scale.value = withSpring(0.98, { damping: 18, stiffness: 300 }); }}
+      onPressOut={() => { scale.value = withSpring(1, { damping: 14, stiffness: 260 }); }}
+      style={[styles.card, Shadows.sm, pressStyle]}
+    >
+      <View style={[styles.bubble, { backgroundColor: cat.color + (isOn ? '1F' : '10') }]}>
+        <Text style={[styles.emoji, !isOn && styles.dim]}>{cat.emoji}</Text>
+      </View>
 
-        <View style={styles.body}>
-          <View style={styles.topRow}>
-            <Text style={[styles.text, !isOn && styles.textOff]} numberOfLines={2}>
-              {reminder.text}
-            </Text>
-            <Switch
-              value={isOn}
-              onValueChange={handleToggle}
-              trackColor={{ false: Colors.sea2, true: Colors.sea3 }}
-              thumbColor={isOn ? Colors.seafoam : Colors.soft}
-              ios_backgroundColor={Colors.sea2}
-              style={{ transform: [{ scaleX: 0.85 }, { scaleY: 0.85 }] }}
-            />
-          </View>
-
-          <View style={styles.metaRow}>
-            {timeStr && (
-              <View style={styles.chip}>
-                <Feather name="clock" size={10} color={Colors.mid} />
-                <Text style={styles.chipText}>{timeStr}</Text>
-              </View>
-            )}
-            <View style={styles.chip}>
-              <Feather name="refresh-cw" size={10} color={Colors.mid} />
-              <Text style={styles.chipText}>{repeatText}</Text>
-            </View>
-            {reminder.mode && (
-              <View style={[styles.chip, { borderColor: accentColor + '60', backgroundColor: accentColor + '15' }]}>
-                <Text style={[styles.chipText, { color: accentColor }]}>{reminder.mode}</Text>
-              </View>
-            )}
-            {reminder.escalation && (
-              <View style={[styles.chip, { borderColor: Colors.coral + '60', backgroundColor: Colors.coral + '15' }]}>
-                <Feather name="trending-up" size={10} color={Colors.coral} />
-                <Text style={[styles.chipText, { color: Colors.coral }]}>Escalate</Text>
-              </View>
-            )}
-          </View>
+      <View style={styles.body}>
+        <Text style={[styles.text, !isOn && styles.textOff]} numberOfLines={2}>{reminder.text}</Text>
+        <View style={styles.metaRow}>
+          <Feather name={isOn ? 'clock' : 'pause-circle'} size={12} color={isOn ? Colors.deep : Colors.soft} />
+          <Text style={[styles.when, !isOn && styles.metaOff]} numberOfLines={1}>
+            {isOn ? (next ? formatWhen(next) : 'No upcoming time') : 'Paused'}
+          </Text>
         </View>
+        <Text style={styles.repeat} numberOfLines={1}>
+          {describeRepeat(reminder)}{burst ? `  ·  ${burst}` : ''}
+        </Text>
+      </View>
 
-        <Pressable onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDelete?.(reminder.id); }} style={styles.deleteBtn}>
-          <Feather name="trash-2" size={14} color={Colors.soft} />
-        </Pressable>
-      </Pressable>
-    </Animated.View>
+      <Switch
+        value={isOn}
+        onValueChange={(v) => { Haptics.selectionAsync(); onToggle?.(reminder, v); }}
+        trackColor={{ false: Colors.sea2, true: Colors.seafoam }}
+        thumbColor={Colors.white}
+        ios_backgroundColor={Colors.sea2}
+      />
+    </AnimatedPressable>
   );
 }
 
+export default memo(ReminderCard);
+
 const styles = StyleSheet.create({
   card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
     backgroundColor: Colors.white,
-    borderRadius: Radii.lg,
-    flexDirection: 'row',
-    alignItems: 'stretch',
+    borderRadius: Radii.xl,
+    paddingVertical: 14,
+    paddingLeft: 14,
+    paddingRight: 10,
     marginBottom: 10,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
   },
-  cardOff: {
-    opacity: 0.65,
-  },
-  accent: {
-    width: 3,
-    borderRadius: 0,
-  },
-  body: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 8,
-  },
-  text: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '400',
-    color: Colors.ink,
-    lineHeight: 21,
-  },
-  textOff: {
-    color: Colors.mid,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: Radii.full,
-    backgroundColor: Colors.sea,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-  },
-  chipText: {
-    fontSize: 10,
-    color: Colors.mid,
-    letterSpacing: 0.3,
-  },
-  deleteBtn: {
-    paddingHorizontal: 14,
+  bubble: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    borderLeftWidth: 0.5,
-    borderLeftColor: Colors.borderLight,
   },
+  emoji: { fontSize: 22 },
+  dim: { opacity: 0.5 },
+  body: { flex: 1, gap: 4 },
+  text: { fontSize: 16, fontWeight: '600', color: Colors.ink, lineHeight: 21 },
+  textOff: { color: Colors.soft },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  when: { fontSize: 13, color: Colors.deep, fontWeight: '500' },
+  metaOff: { color: Colors.soft },
+  repeat: { fontSize: 12, color: Colors.mid },
 });

@@ -33,6 +33,7 @@ export async function scheduleNativeAlarm(reminder) {
     const payload = {
       id: String(reminder.id),
       text: String(reminder.text || 'Reminder'),
+      icon: String(reminder.category || 'general'),
       scheduledTime: Number(reminder.scheduledTime || Date.now()),
       repeatType: String(reminder.repeatType || 'once'),
       repeatInterval: Number(reminder.repeatInterval || 1),
@@ -48,6 +49,26 @@ export async function scheduleNativeAlarm(reminder) {
     return await AlarmModule.scheduleAlarm(payload);
   } catch (error) {
     console.error('[NativeAlarm] scheduleAlarm error:', error);
+    return false;
+  }
+}
+
+/**
+ * Push global voice / alarm preferences to the native engine (applies to every reminder).
+ */
+export async function setNativeAlarmSettings(settings) {
+  if (!isNativeAlarmSupported) return false;
+  try {
+    return await AlarmModule.setAlarmSettings({
+      voiceId: settings.voiceId || null,
+      rate: Number(settings.rate ?? 0.95),
+      pitch: Number(settings.pitch ?? 1.0),
+      announcePrefix: Boolean(settings.announcePrefix),
+      vibrate: settings.vibrate !== false,
+      snoozeMinutes: Number(settings.snoozeMinutes || 5),
+    });
+  } catch (error) {
+    console.error('[NativeAlarm] setAlarmSettings error:', error);
     return false;
   }
 }
@@ -163,6 +184,53 @@ export async function requestExactAlarmPermission() {
     return await AlarmModule.requestExactAlarmPermission();
   } catch (error) {
     console.error('[NativeAlarm] requestExactAlarmPermission error:', error);
+    return false;
+  }
+}
+
+/**
+ * "Display over other apps" lets the alarm screen pop up by itself when the phone is locked.
+ */
+export async function canDrawOverlays() {
+  if (!isNativeAlarmSupported) return true;
+  try {
+    return await AlarmModule.canDrawOverlays();
+  } catch (error) {
+    return true;
+  }
+}
+
+export async function requestOverlayPermission() {
+  if (!isNativeAlarmSupported) return false;
+  try {
+    return await AlarmModule.requestOverlayPermission();
+  } catch (error) {
+    console.error('[NativeAlarm] requestOverlayPermission error:', error);
+    return false;
+  }
+}
+
+/**
+ * Android 14+: whether the lock-screen alarm UI (full-screen intent) is allowed.
+ */
+export async function canUseFullScreenIntent() {
+  if (!isNativeAlarmSupported) return true;
+  try {
+    return await AlarmModule.canUseFullScreenIntent();
+  } catch (error) {
+    return true;
+  }
+}
+
+/**
+ * Open the system setting that allows showing the alarm over the lock screen.
+ */
+export async function requestFullScreenIntentPermission() {
+  if (!isNativeAlarmSupported) return false;
+  try {
+    return await AlarmModule.requestFullScreenIntentPermission();
+  } catch (error) {
+    console.error('[NativeAlarm] requestFullScreenIntentPermission error:', error);
     return false;
   }
 }

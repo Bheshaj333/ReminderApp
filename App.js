@@ -1,5 +1,5 @@
 import 'react-native-gesture-handler';
-import React, { useEffect } from 'react';
+import React from 'react';
 import { StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -8,14 +8,9 @@ import { StatusBar } from 'expo-status-bar';
 
 import { AppProvider } from './src/store/AppContext';
 import AppNavigator from './src/navigation/AppNavigator';
-import { requestPermissions } from './src/utils/notifications';
 import { Colors } from './src/utils/theme';
 
 export default function App() {
-  useEffect(() => {
-    requestPermissions();
-  }, []);
-
   return (
       <GestureHandlerRootView style={styles.root}>
         <SafeAreaProvider>

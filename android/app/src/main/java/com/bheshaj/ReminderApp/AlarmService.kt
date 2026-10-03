@@ -1,5 +1,6 @@
 package com.bheshaj.ReminderApp
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -14,6 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -62,13 +64,18 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
     private val maxSpeechRepeats = 1 // Speak reminder once per alarm trigger
     private val safetyTimeoutMs = 180 * 1000L // 3 minutes safety timeout while waiting for speech
 
+    // True when the ring ends on its own (no Done/Snooze/Dismiss), so options are kept in the shade
+    private var finishedUnanswered = false
+
     private val stopRunnable = Runnable {
         Log.d(TAG, "Alarm reached auto-dismiss timeout (5s after message finished speaking)")
+        finishedUnanswered = true
         stopSelf()
     }
 
     private val safetyTimeoutRunnable = Runnable {
         Log.d(TAG, "Alarm reached safety timeout (180s)")
+        finishedUnanswered = true
         stopSelf()
     }
 
@@ -104,9 +111,17 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
         // Notify React Native UI if app is open
         AlarmModule.emitAlarmTriggered(reminderId, reminderText, burstIndex, burstCount)
 
+        // A new ring replaces any unanswered notification left by the previous one
+        finishedUnanswered = false
+        AlarmNotifier.cancelPending(this, reminderId)
+
         // Build and display ongoing high-priority notification immediately
         val notification = buildAlarmNotification(reminderId, reminderText)
         startForeground(NOTIFICATION_ID, notification)
+
+        // Like a clock alarm: pop the alarm screen by itself when the phone is locked or asleep.
+        // The notification's full-screen intent alone is often downgraded to a heads-up by OEMs.
+        launchAlarmScreenIfLocked()
 
         // Request Audio Focus
         requestAlarmAudioFocus()
@@ -126,6 +141,24 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
         }
 
         return START_STICKY
+    }
+
+    private fun launchAlarmScreenIfLocked() {
+        try {
+            val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            val power = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val locked = keyguard?.isKeyguardLocked == true
+            val screenOff = power?.isInteractive == false
+            if (!locked && !screenOff) return
+
+            startActivity(
+                AlarmNotifier.alarmScreenLaunchIntent(this, reminderId, reminderText, burstIndex, burstCount, burstInterval)
+            )
+            Log.d(TAG, "Launched AlarmActivity directly (locked=$locked, screenOff=$screenOff)")
+        } catch (e: Exception) {
+            // Background activity start blocked; the full-screen intent remains the fallback
+            Log.w(TAG, "Direct AlarmActivity launch blocked", e)
+        }
     }
 
     override fun onInit(status: Int) {
@@ -193,23 +226,16 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
     private fun setupTtsParameters() {
         val ttsInstance = tts ?: return
         try {
-            ttsInstance.language = Locale.getDefault()
-
-            // Configure pitch and speech rate based on voice style
-            when (voiceStyle) {
-                "firm" -> {
-                    ttsInstance.setPitch(0.85f)
-                    ttsInstance.setSpeechRate(0.9f)
-                }
-                "gentle" -> {
-                    ttsInstance.setPitch(1.15f)
-                    ttsInstance.setSpeechRate(0.85f)
-                }
-                else -> {
-                    ttsInstance.setPitch(1.0f)
-                    ttsInstance.setSpeechRate(0.95f)
-                }
+            val prefs = AlarmSettings.get(this)
+            // Voice chosen on the Voice screen (falls back to the device language)
+            val chosen = prefs.voiceId?.let { id -> ttsInstance.voices?.firstOrNull { it.name == id } }
+            if (chosen != null) {
+                ttsInstance.voice = chosen
+            } else {
+                ttsInstance.language = Locale.getDefault()
             }
+            ttsInstance.setPitch(prefs.pitch)
+            ttsInstance.setSpeechRate(prefs.rate)
 
             // Route audio explicitly through ALARM stream
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -235,16 +261,19 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 val utteranceId = "Reminder_Utterance_$speechRepeatCount"
-                ttsInstance.speak(reminderText, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                ttsInstance.speak(spokenText(), TextToSpeech.QUEUE_FLUSH, null, utteranceId)
             } else {
                 @Suppress("DEPRECATION")
-                ttsInstance.speak(reminderText, TextToSpeech.QUEUE_FLUSH, params)
+                ttsInstance.speak(spokenText(), TextToSpeech.QUEUE_FLUSH, params)
             }
             Log.d(TAG, "Spoke reminder: '$reminderText' (repetition $speechRepeatCount)")
         } catch (e: Exception) {
             Log.e(TAG, "Error speaking text", e)
         }
     }
+
+    private fun spokenText(): String =
+        if (AlarmSettings.get(this).announcePrefix) "Reminder. $reminderText" else reminderText
 
     private fun initAudioAndVibration() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -303,6 +332,7 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun startVibration() {
+        if (!AlarmSettings.get(this).vibrate) return
         val vib = vibrator ?: return
         try {
             val pattern = longArrayOf(0, 600, 400, 600, 400, 600, 1000)
@@ -355,60 +385,31 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun buildAlarmNotification(id: String, text: String): Notification {
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        } else {
-            PendingIntent.FLAG_UPDATE_CURRENT
-        }
+        // Full-screen intent shows the lock-screen AlarmActivity when the device is locked/screen off;
+        // while the phone is in use Android shows this as a heads-up panel with the action buttons.
+        val screenIntent = AlarmNotifier.alarmScreenIntent(this, id, text, burstIndex, burstCount, burstInterval)
 
-        // Full Screen Intent (launches app UI over lock screen)
-        val fullScreenIntent = Intent(this, MainActivity::class.java).apply {
-            setFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP
-            )
-            putExtra("reminderId", id)
-            putExtra("alarmText", text)
-            putExtra("isAlarmTrigger", true)
-        }
-        val fullScreenPendingIntent = PendingIntent.getActivity(this, 1001, fullScreenIntent, flags)
-
-        // Dismiss Action
-        val dismissIntent = Intent(this, AlarmReceiver::class.java).apply {
-            action = AlarmReceiver.ACTION_DISMISS
-            putExtra(AlarmReceiver.EXTRA_ALARM_ID, id)
-        }
-        val dismissPendingIntent = PendingIntent.getBroadcast(this, 1002, dismissIntent, flags)
-
-        // Snooze Action
-        val snoozeIntent = Intent(this, AlarmReceiver::class.java).apply {
-            action = AlarmReceiver.ACTION_SNOOZE
-            putExtra(AlarmReceiver.EXTRA_ALARM_ID, id)
-        }
-        val snoozePendingIntent = PendingIntent.getBroadcast(this, 1003, snoozeIntent, flags)
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Spoken Reminder")
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_reminder)
+            .setColor(0xFF78BDAF.toInt())
+            .setContentTitle("Reminder")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(fullScreenPendingIntent)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setContentIntent(screenIntent)
+            .setFullScreenIntent(screenIntent, true)
             .setOngoing(true)
             .setAutoCancel(false)
-            .addAction(R.mipmap.ic_launcher, "Done", dismissPendingIntent)
-            .addAction(R.mipmap.ic_launcher, "Snooze (5m)", snoozePendingIntent)
-            .build()
+        return AlarmNotifier.addActions(builder, this, id).build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "AlarmService destroying...")
         val finishedId = currentAlarmId
+        val leavePending = finishedUnanswered
         isRunning = false
         currentAlarmId = null
         currentAlarmText = null
@@ -446,6 +447,9 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
 
         // Let the React Native UI close its alarm screen now that speaking is over
         if (!finishedId.isNullOrEmpty()) {
+            if (leavePending) {
+                AlarmNotifier.showPending(this, finishedId, reminderText, burstIndex, burstCount, burstInterval)
+            }
             AlarmModule.emitAlarmStopped(finishedId)
         }
     }

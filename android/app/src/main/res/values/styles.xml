@@ -8,4 +8,14 @@
   <style name="Theme.App.SplashScreen" parent="AppTheme">
     <item name="android:windowBackground">@drawable/ic_launcher_background</item>
   </style>
+  <style name="AlarmTheme" parent="Theme.AppCompat.NoActionBar">
+    <item name="android:windowBackground">@drawable/alarm_bg</item>
+    <item name="android:statusBarColor">@android:color/transparent</item>
+    <item name="android:navigationBarColor">@android:color/transparent</item>
+    <item name="android:windowAnimationStyle">@style/AlarmWindowAnimation</item>
+  </style>
+  <style name="AlarmWindowAnimation" parent="@android:style/Animation.Activity">
+    <item name="android:activityOpenEnterAnimation">@android:anim/fade_in</item>
+    <item name="android:activityCloseExitAnimation">@android:anim/fade_out</item>
+  </style>
 </resources>

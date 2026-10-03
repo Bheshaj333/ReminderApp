@@ -1,391 +1,320 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  Pressable, StatusBar, Keyboard,
-} from 'react-native';
-import Animated, {
-  useSharedValue, useAnimatedStyle, withSpring, withTiming,
-  withSequence, withRepeat, FadeInDown, FadeIn, SlideInRight,
-} from 'react-native-reanimated';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, StatusBar, Keyboard } from 'react-native';
+import Animated, { FadeIn, FadeInDown, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import uuid from 'react-native-uuid';
 
-import { Colors, Radii, Shadows, Typography, VOICE_PHRASES } from '../utils/theme';
+import { Colors, Radii, Shadows } from '../utils/theme';
 import { useApp } from '../store/AppContext';
-import EscalationBar from '../components/EscalationBar';
-import PressButton from '../components/PressButton';
-import FullscreenReminder from '../components/FullscreenReminder';
-import { speak } from '../utils/speech';
+import { getCategory } from '../utils/categories';
+import { nextOccurrence, describeRepeat, formatWhen, formatCountdown, formatTime, formatDay } from '../utils/schedule';
+import Logo from '../components/Logo';
+import { usePermissions } from '../utils/permissions';
 
-const MODES = ['Focus', 'Health', 'Study', 'Sleep', 'Gym'];
-const MODE_ICONS = { Focus: 'cpu', Health: 'heart', Study: 'book-open', Sleep: 'moon', Gym: 'zap' };
-const MODE_COLORS = {
-  Focus: Colors.seafoam, Health: Colors.coral, Study: Colors.petalDeep,
-  Sleep: Colors.deep, Gym: Colors.jasmineDark,
-};
+function greeting(h) {
+  if (h < 5) return 'Good night';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+/** One-tap times for the quick add bar. */
+function quickTimes(now) {
+  const d = new Date(now);
+  const at = (days, h, m = 0) => {
+    const x = new Date(d); x.setDate(x.getDate() + days); x.setHours(h, m, 0, 0); return x.getTime();
+  };
+  const options = [
+    { label: 'In 10 min', time: now + 10 * 60 * 1000 },
+    { label: 'In 1 hour', time: now + 60 * 60 * 1000 },
+  ];
+  if (d.getHours() < 19) options.push({ label: 'Tonight 8 PM', time: at(0, 20) });
+  options.push({ label: 'Tomorrow 9 AM', time: at(1, 9) });
+  return options;
+}
 
 export default function HomeScreen({ navigation }) {
-  const { state, updateSettings, addReminder, dismissReminder, snoozeReminder, ignoreReminder } = useApp();
-  const { settings, reminders, activeReminder } = state;
-
+  const { state, addReminder, updateSettings } = useApp();
+  const { reminders, settings } = state;
+  const [now, setNow] = useState(Date.now());
   const [quickText, setQuickText] = useState('');
-  const [currentPhrase, setCurrentPhrase] = useState('Drink some water.');
-  const [phraseSet, setPhraseSet] = useState('water');
-  const [escStep, setEscStep] = useState(2);
-  const [showFullscreen, setShowFullscreen] = useState(false);
+  const [added, setAdded] = useState(null);
+  const { missing } = usePermissions();
+  // Warn only about permissions the user hasn't already chosen to ignore
+  const hidden = settings.dismissedPermissionWarnings || [];
+  const warnAbout = missing.filter(p => !hidden.includes(p.key));
+  const dismissWarning = () => {
+    Haptics.selectionAsync();
+    updateSettings({ dismissedPermissionWarnings: [...new Set([...hidden, ...warnAbout.map(p => p.key)])] });
+  };
 
-  const phraseOpacity = useSharedValue(1);
-  const liveY = useSharedValue(0);
-  const inputRef = useRef(null);
-
-  const displayPhrase = activeReminder?.text || currentPhrase;
-  const displayIcon = activeReminder?.icon || phraseSet;
-
-  const phraseKeys = Object.keys(VOICE_PHRASES);
-  let phraseIdx = useRef(0);
-  let setIdx = useRef(0);
-
+  // Keep countdowns fresh without re-rendering constantly
   useEffect(() => {
-    const interval = setInterval(() => {
-      phraseOpacity.value = withTiming(0, { duration: 300 }, () => {
-        phraseIdx.current = (phraseIdx.current + 1) % VOICE_PHRASES[phraseKeys[setIdx.current]].length;
-        if (phraseIdx.current === 0) {
-          setIdx.current = (setIdx.current + 1) % phraseKeys.length;
-        }
-        const key = phraseKeys[setIdx.current];
-        const phrase = VOICE_PHRASES[key][phraseIdx.current];
-        
-        // Use runOnJS to update state from the worklet scope if needed, 
-        // but here we are just triggering the fade back in
-      });
-
-      setTimeout(() => {
-        const key = phraseKeys[setIdx.current];
-        const phrase = VOICE_PHRASES[key][phraseIdx.current];
-        setCurrentPhrase(phrase);
-        setPhraseSet(key);
-        phraseOpacity.value = withTiming(1, { duration: 400 });
-      }, 320);
-    }, 5000); // Increased interval to 5s for better UX
-    return () => clearInterval(interval);
+    const t = setInterval(() => setNow(Date.now()), 30 * 1000);
+    return () => clearInterval(t);
   }, []);
 
-  // Subtle bounce on active card
   useEffect(() => {
-    liveY.value = withRepeat(
-      withSequence(
-        withTiming(-2, { duration: 2000 }),
-        withTiming(0, { duration: 2000 })
-      ),
-      -1,
-      true
-    );
-  }, []);
+    if (!added) return;
+    const t = setTimeout(() => setAdded(null), 2600);
+    return () => clearTimeout(t);
+  }, [added]);
 
-  const phraseStyle = useAnimatedStyle(() => ({ opacity: phraseOpacity.value }));
-  const liveStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: liveY.value }],
-  }));
+  const upcoming = useMemo(() => reminders
+    .filter(r => r.active)
+    .map(r => ({ r, at: nextOccurrence(r, now) }))
+    .filter(x => x.at)
+    .sort((a, b) => a.at - b.at), [reminders, now]);
 
+  const hero = upcoming[0];
+  const rest = upcoming.slice(1, 6);
   const activeCount = reminders.filter(r => r.active).length;
 
-  const handleQuickAdd = () => {
-    if (!quickText.trim()) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const reminder = {
+  const quickAdd = (time) => {
+    const text = quickText.trim();
+    if (!text) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    addReminder({
       id: uuid.v4(),
-      text: quickText.trim(),
-      active: true,
-      repeatType: 'custom',
-      repeatInterval: 30,
-      repeatUnit: 'minutes',
+      text,
+      category: 'general',
+      repeatType: 'once',
+      scheduledTime: time,
+      repeatInterval: 1,
+      repeatUnit: 'hours',
+      daysOfWeek: [],
       repeatCount: 0,
       burstInterval: 0,
-      mode: settings.activeMode,
-      escalation: settings.escalationEnabled,
+      active: true,
       createdAt: Date.now(),
-    };
-    addReminder(reminder);
+    });
     setQuickText('');
     Keyboard.dismiss();
+    setAdded(formatWhen(time));
   };
 
-  const handleDone = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setShowFullscreen(false);
-  };
+  const openEditor = (params) => navigation.navigate('ReminderEdit', params);
+  const today = new Date(now);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.mist} />
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Header */}
-        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
-          <View>
-            <Text style={styles.wordmark}>inter<Text style={styles.accent}>rupt</Text></Text>
-            <Text style={styles.subtitle}>your attention, redirected</Text>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <Animated.View entering={FadeIn.duration(350)} style={styles.header}>
+          <Logo size={46} tile />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>{greeting(today.getHours())}</Text>
+            <Text style={styles.date}>
+              {today.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}
+            </Text>
           </View>
-          <Pressable onPress={() => navigation.navigate('Settings')} style={styles.settingsBtn}>
-            <Feather name="settings" size={18} color={Colors.mid} />
-          </Pressable>
+          <View style={styles.countPill}>
+            <View style={styles.countDot} />
+            <Text style={styles.countText}>{activeCount} on</Text>
+          </View>
         </Animated.View>
 
-        {/* Live Pill */}
-        <Animated.View entering={FadeIn.delay(100).duration(400)} style={styles.liveRow}>
-          <View style={styles.livePill}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>{activeCount} active</Text>
-          </View>
-          <Text style={styles.dateText}>{new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</Text>
-        </Animated.View>
-
-        {/* Active Reminder Card */}
-        <Animated.View entering={FadeInDown.delay(150).springify()}>
-          <Animated.View style={liveStyle}>
-            <Pressable onPress={() => setShowFullscreen(true)} style={[styles.mainCard, Shadows.md]}>
-              <View style={styles.cardAccent} />
-              <View style={styles.cardBody}>
-                <Text style={styles.cardEyebrow}>{activeReminder ? 'Attention Required' : 'Right now · escalating'}</Text>
-                <Animated.Text style={[styles.cardPhrase, phraseStyle]}>{displayPhrase}</Animated.Text>
-                <EscalationBar currentStep={activeReminder ? (activeReminder.burstIndex ?? 0) + 1 : escStep} />
-                <View style={styles.actionRow}>
-                  <PressButton
-                    label="Done"
-                    onPress={() => { 
-                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); 
-                      if (activeReminder) dismissReminder(activeReminder);
-                    }}
-                    variant="primary"
-                    style={{ flex: 1, backgroundColor: activeReminder ? Colors.deep : Colors.seafoam }}
-                  />
-                  <PressButton
-                    label="Snooze 5m"
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      if (activeReminder) snoozeReminder(activeReminder);
-                    }}
-                    variant="secondary"
-                  />
-                  <PressButton
-                    label="Ignore"
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      if (activeReminder) ignoreReminder(activeReminder);
-                    }}
-                    variant="ghost"
-                  />
-                </View>
-              </View>
+        {warnAbout.length > 0 && (
+          <Animated.View entering={FadeInDown.duration(350)} exiting={FadeOut.duration(200)} style={styles.warn}>
+            <Feather name="alert-triangle" size={16} color={Colors.coralDeep} />
+            <Text style={styles.warnText}>
+              {warnAbout.length === 1 ? `${warnAbout[0].title} is off` : `${warnAbout.length} permissions are off`}. Reminders may not ring.
+            </Text>
+            <Pressable onPress={() => navigation.navigate('Settings')} hitSlop={8}>
+              <Text style={styles.warnFix}>Fix</Text>
             </Pressable>
-          </Animated.View>
-        </Animated.View>
-
-        {/* Quick Add */}
-        <Animated.View entering={FadeInDown.delay(250).duration(400)} style={[styles.quickWrap, Shadows.sm]}>
-          <Feather name="plus" size={16} color={Colors.soft} style={{ marginLeft: 4 }} />
-          <TextInput
-            ref={inputRef}
-            style={styles.quickInput}
-            placeholder="Remind me to…"
-            placeholderTextColor={Colors.soft}
-            value={quickText}
-            onChangeText={setQuickText}
-            onSubmitEditing={handleQuickAdd}
-            returnKeyType="done"
-          />
-          <Pressable onPress={handleQuickAdd} style={styles.addBtn}>
-            <Text style={styles.addBtnText}>Add</Text>
-          </Pressable>
-        </Animated.View>
-
-        {/* Mode Chips */}
-        <Animated.View entering={FadeInDown.delay(300).duration(400)}>
-          <Text style={styles.sectionLabel}>Mode</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.modeScroll}
-            contentContainerStyle={styles.modeScrollContent}
-          >
-            {MODES.map((mode, i) => {
-              const active = settings.activeMode === mode;
-              const color = MODE_COLORS[mode];
-              return (
-                <Animated.View key={mode} entering={FadeInDown.delay(300 + i * 40).duration(300)}>
-                  <Pressable
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      updateSettings({ activeMode: mode });
-                    }}
-                    style={[
-                      styles.modeChip,
-                      active && { backgroundColor: color + '18', borderColor: color },
-                    ]}
-                  >
-                    <Feather name={MODE_ICONS[mode]} size={13} color={active ? color : Colors.soft} />
-                    <Text style={[styles.modeText, active && { color, fontWeight: '600' }]}>{mode}</Text>
-                  </Pressable>
-                </Animated.View>
-              );
-            })}
-          </ScrollView>
-        </Animated.View>
-
-        {/* Recent Reminders Preview */}
-        {reminders.length > 0 && (
-          <Animated.View entering={FadeInDown.delay(350).duration(400)}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionLabel}>Upcoming</Text>
-              <Pressable onPress={() => navigation.navigate('Reminders')}>
-                <Text style={styles.seeAll}>See all →</Text>
-              </Pressable>
-            </View>
-            {reminders.slice(0, 3).map((r, i) => (
-              <Animated.View key={r.id} entering={FadeInDown.delay(i * 60)}>
-                <Pressable style={[styles.miniCard, Shadows.sm]}>
-                  <View style={[styles.miniAccent, { backgroundColor: (MODE_COLORS[r.mode] || Colors.seafoam) + (r.active ? 'FF' : '40') }]} />
-                  <Text style={[styles.miniText, !r.active && { color: Colors.soft }]} numberOfLines={1}>
-                    {r.text}
-                  </Text>
-                  <View style={[styles.miniTag, r.active && styles.miniTagActive]}>
-                    <Text style={[styles.miniTagText, r.active && { color: Colors.deep }]}>
-                      {r.active ? 'on' : 'off'}
-                    </Text>
-                  </View>
-                </Pressable>
-              </Animated.View>
-            ))}
+            <Pressable onPress={dismissWarning} hitSlop={10} style={styles.warnClose}>
+              <Feather name="x" size={16} color={Colors.mid} />
+            </Pressable>
           </Animated.View>
         )}
 
-        <View style={{ height: 100 }} />
-      </ScrollView>
+        {/* Next up */}
+        <Animated.View entering={FadeInDown.delay(60).duration(400)}>
+          {hero ? (
+            <Pressable onPress={() => openEditor({ reminder: hero.r })}>
+              <LinearGradient colors={['#0B2421', '#1A4A40', '#2D6B5F']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.hero, Shadows.md]}>
+                <View style={styles.heroTop}>
+                  <Text style={styles.heroEyebrow}>NEXT UP</Text>
+                  <View style={styles.heroBadge}>
+                    <Feather name="volume-2" size={12} color="#A8F0DC" />
+                    <Text style={styles.heroBadgeText}>{formatCountdown(hero.at, now)}</Text>
+                  </View>
+                </View>
+                <View style={styles.heroBody}>
+                  <Text style={styles.heroEmoji}>{getCategory(hero.r.category).emoji}</Text>
+                  <Text style={styles.heroText} numberOfLines={3}>{hero.r.text}</Text>
+                </View>
+                <View style={styles.heroFoot}>
+                  <Text style={styles.heroTime}>{formatWhen(hero.at, now)}</Text>
+                  <Text style={styles.heroRepeat}>{describeRepeat(hero.r)}</Text>
+                </View>
+              </LinearGradient>
+            </Pressable>
+          ) : (
+            <Pressable onPress={() => openEditor()} style={[styles.empty, Shadows.sm]}>
+              <View style={styles.emptyIcon}><Feather name="plus" size={22} color={Colors.deep} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.emptyTitle}>Nothing scheduled</Text>
+                <Text style={styles.emptyText}>Create a reminder and it will be read out loud at the right time.</Text>
+              </View>
+            </Pressable>
+          )}
+        </Animated.View>
 
-      <FullscreenReminder
-        visible={showFullscreen}
-        reminder={{ id: '1', text: currentPhrase, icon: phraseSet }}
-        onDone={handleDone}
-        onSnooze={() => setShowFullscreen(false)}
-        onIgnore={() => setShowFullscreen(false)}
-      />
+        {/* Quick add */}
+        <Animated.View entering={FadeInDown.delay(120).duration(400)} layout={LinearTransition.duration(250)} style={[styles.quick, Shadows.sm]}>
+          <View style={styles.quickRow}>
+            <Feather name="mic" size={18} color={Colors.seafoamDeep} />
+            <TextInput
+              style={styles.quickInput}
+              placeholder="Remind me to…"
+              placeholderTextColor={Colors.soft}
+              value={quickText}
+              onChangeText={setQuickText}
+              returnKeyType="done"
+            />
+          </View>
+          {quickText.trim().length > 0 && (
+            <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(150)}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips} keyboardShouldPersistTaps="handled">
+                {quickTimes(Date.now()).map(o => (
+                  <Pressable key={o.label} onPress={() => quickAdd(o.time)} style={styles.chip}>
+                    <Text style={styles.chipText}>{o.label}</Text>
+                  </Pressable>
+                ))}
+                <Pressable
+                  onPress={() => { const text = quickText.trim(); setQuickText(''); openEditor({ text }); }}
+                  style={[styles.chip, styles.chipMore]}
+                >
+                  <Text style={[styles.chipText, { color: Colors.white }]}>More options</Text>
+                  <Feather name="arrow-right" size={13} color={Colors.white} />
+                </Pressable>
+              </ScrollView>
+            </Animated.View>
+          )}
+          {added && (
+            <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.addedRow}>
+              <Feather name="check-circle" size={14} color={Colors.seafoamDeep} />
+              <Text style={styles.addedText}>Added for {added}</Text>
+            </Animated.View>
+          )}
+        </Animated.View>
+
+        {/* Coming up */}
+        {rest.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(180).duration(400)}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.section}>Coming up</Text>
+              <Pressable onPress={() => navigation.navigate('Reminders')} hitSlop={10}>
+                <Text style={styles.seeAll}>See all</Text>
+              </Pressable>
+            </View>
+            <View style={[styles.list, Shadows.sm]}>
+              {rest.map(({ r, at }, i) => (
+                <Pressable
+                  key={r.id}
+                  onPress={() => openEditor({ reminder: r })}
+                  style={({ pressed }) => [styles.item, i > 0 && styles.itemBorder, pressed && { backgroundColor: Colors.sea }]}
+                >
+                  <View style={styles.itemTime}>
+                    <Text style={styles.itemClock}>{formatTime(at)}</Text>
+                    <Text style={styles.itemDay} numberOfLines={1}>{formatDay(at, now)}</Text>
+                  </View>
+                  <View style={[styles.itemDot, { backgroundColor: getCategory(r.category).color }]} />
+                  <Text style={styles.itemText} numberOfLines={1}>{r.text}</Text>
+                  <Text style={styles.itemEmoji}>{getCategory(r.category).emoji}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </Animated.View>
+        )}
+
+        <View style={{ height: 120 }} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.mist },
-  scroll: { flex: 1 },
-  content: { padding: 20 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-    paddingTop: 4,
-  },
-  wordmark: { fontFamily: 'Georgia', fontSize: 26, fontWeight: '600', color: Colors.deeper },
-  accent: { color: Colors.seafoam },
-  subtitle: { fontSize: 12, color: Colors.soft, marginTop: 2, letterSpacing: 0.5 },
-  settingsBtn: {
-    width: 38, height: 38, borderRadius: Radii.full,
-    backgroundColor: Colors.white, borderWidth: 0.5, borderColor: Colors.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  liveRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  livePill: {
+  content: { paddingHorizontal: 20, paddingTop: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 22 },
+  greeting: { fontFamily: 'Georgia', fontSize: 24, fontWeight: '600', color: Colors.deeper },
+  date: { fontSize: 13, color: Colors.mid, marginTop: 2 },
+  countPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: Colors.sea, borderWidth: 0.5, borderColor: Colors.sea3,
-    borderRadius: Radii.full, paddingHorizontal: 12, paddingVertical: 5,
+    backgroundColor: Colors.white, borderRadius: Radii.full, borderWidth: 1, borderColor: Colors.borderLight,
+    paddingHorizontal: 12, height: 32,
   },
-  liveDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.seafoam,
+  countDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.seafoam },
+  countText: { fontSize: 12, color: Colors.deep, fontWeight: '600' },
+
+  warn: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, marginBottom: 14,
+    backgroundColor: '#FDF1ED', borderRadius: 18, borderWidth: 1, borderColor: '#F8D3C7',
   },
-  liveText: { fontSize: 12, color: Colors.deep, letterSpacing: 0.3 },
-  dateText: { fontSize: 12, color: Colors.soft, letterSpacing: 0.3 },
-  mainCard: {
-    backgroundColor: Colors.white, borderRadius: Radii.xl,
-    flexDirection: 'row', marginBottom: 16,
-    borderWidth: 0.5, borderColor: Colors.sea2, overflow: 'hidden',
+  warnText: { flex: 1, fontSize: 13, color: Colors.ink, lineHeight: 18 },
+  warnFix: { fontSize: 13, fontWeight: '800', color: Colors.coralDeep },
+  warnClose: { marginLeft: 2, padding: 2 },
+  hero: { borderRadius: 26, padding: 22, marginBottom: 16, overflow: 'hidden' },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  heroEyebrow: { fontSize: 11, letterSpacing: 3, color: 'rgba(168,240,220,0.8)', fontWeight: '700' },
+  heroBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 10, height: 26,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
-  cardAccent: { width: 3, backgroundColor: Colors.seafoam },
-  cardBody: { flex: 1, padding: 20 },
-  cardEyebrow: {
-    fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
-    color: Colors.soft, marginBottom: 10,
-  },
-  cardPhrase: {
-    fontFamily: 'Georgia', fontSize: 24, fontWeight: '500',
-    color: Colors.deeper, marginBottom: 20, lineHeight: 32,
-  },
-  actionRow: { flexDirection: 'row', gap: 8, marginTop: 18 },
-  quickWrap: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg,
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 14, paddingVertical: 4,
-    borderWidth: 0.5, borderColor: Colors.border, marginBottom: 20,
-  },
-  quickInput: {
-    flex: 1, fontSize: 14, color: Colors.ink,
-    paddingVertical: 12, fontWeight: '300',
-  },
-  addBtn: {
-    backgroundColor: Colors.seafoam, borderRadius: Radii.sm,
-    paddingHorizontal: 14, paddingVertical: 8,
-  },
-  addBtnText: { fontSize: 13, color: Colors.white, fontWeight: '500', letterSpacing: 0.3 },
-  sectionLabel: {
-    fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
-    color: Colors.soft, marginBottom: 10,
-  },
-  modeScroll: { marginBottom: 20 },
-  modeScrollContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 4,
-    paddingRight: 10,
-  },
-  modeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.white,
-    borderRadius: Radii.full,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    ...Shadows.sm,
-  },
-  modeText: { fontSize: 13, color: Colors.mid, letterSpacing: 0.3 },
-  sectionHeader: {
+  heroBadgeText: { color: '#E8FFF8', fontSize: 12, fontWeight: '600' },
+  heroBody: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginTop: 18 },
+  heroEmoji: { fontSize: 30, marginTop: 2 },
+  heroText: { flex: 1, fontFamily: 'Georgia', fontSize: 25, lineHeight: 32, color: '#fff' },
+  heroFoot: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginBottom: 10,
+    marginTop: 22, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.12)',
   },
-  seeAll: { fontSize: 12, color: Colors.seafoam, letterSpacing: 0.3 },
-  miniCard: {
-    backgroundColor: Colors.white, borderRadius: Radii.md,
-    flexDirection: 'row', alignItems: 'center',
-    borderWidth: 0.5, borderColor: Colors.border,
-    overflow: 'hidden', marginBottom: 8,
+  heroTime: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  heroRepeat: { color: 'rgba(255,255,255,0.65)', fontSize: 13 },
+
+  empty: {
+    flexDirection: 'row', alignItems: 'center', gap: 16,
+    backgroundColor: Colors.white, borderRadius: 24, padding: 20, marginBottom: 16,
+    borderWidth: 1, borderColor: Colors.borderLight,
   },
-  miniAccent: { width: 3, alignSelf: 'stretch' },
-  miniText: { flex: 1, fontSize: 14, color: Colors.ink, paddingVertical: 12, paddingHorizontal: 12 },
-  miniTag: {
-    paddingHorizontal: 10, paddingVertical: 4,
-    borderLeftWidth: 0.5, borderLeftColor: Colors.borderLight,
-    marginRight: 12,
+  emptyIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: Colors.deeper },
+  emptyText: { fontSize: 13, color: Colors.mid, marginTop: 3, lineHeight: 18 },
+
+  quick: {
+    backgroundColor: Colors.white, borderRadius: 22, padding: 6, marginBottom: 26,
+    borderWidth: 1, borderColor: Colors.borderLight,
   },
-  miniTagActive: {},
-  miniTagText: { fontSize: 10, color: Colors.soft, letterSpacing: 0.4 },
+  quickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12 },
+  quickInput: { flex: 1, fontSize: 16, color: Colors.ink, paddingVertical: 12 },
+  chips: { gap: 8, paddingHorizontal: 8, paddingBottom: 8, paddingTop: 2 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    height: 36, paddingHorizontal: 14, borderRadius: 999,
+    backgroundColor: Colors.sea, borderWidth: 1, borderColor: Colors.sea2,
+  },
+  chipMore: { backgroundColor: Colors.deep, borderColor: Colors.deep },
+  chipText: { fontSize: 13, color: Colors.deeper, fontWeight: '600' },
+  addedRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingBottom: 10 },
+  addedText: { fontSize: 13, color: Colors.seafoamDeep, fontWeight: '500' },
+
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  section: { fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase', color: Colors.mid, fontWeight: '700' },
+  seeAll: { fontSize: 13, color: Colors.seafoamDeep, fontWeight: '600' },
+  list: { backgroundColor: Colors.white, borderRadius: 22, borderWidth: 1, borderColor: Colors.borderLight, overflow: 'hidden' },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
+  itemBorder: { borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  itemTime: { width: 70 },
+  itemClock: { fontSize: 14, fontWeight: '700', color: Colors.deeper },
+  itemDay: { fontSize: 11, color: Colors.soft, marginTop: 1 },
+  itemDot: { width: 6, height: 6, borderRadius: 3 },
+  itemText: { flex: 1, fontSize: 15, color: Colors.ink },
+  itemEmoji: { fontSize: 16 },
 });

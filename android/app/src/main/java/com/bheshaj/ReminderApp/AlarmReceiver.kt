@@ -11,6 +11,7 @@ class AlarmReceiver : BroadcastReceiver() {
     companion object {
         const val TAG = "AlarmReceiver"
         const val ACTION_TRIGGER_ALARM = "com.bheshaj.ReminderApp.ALARM_TRIGGER"
+        const val ACTION_DONE = "com.bheshaj.ReminderApp.ACTION_DONE"
         const val ACTION_DISMISS = "com.bheshaj.ReminderApp.ACTION_DISMISS"
         const val ACTION_SNOOZE = "com.bheshaj.ReminderApp.ACTION_SNOOZE"
 
@@ -37,6 +38,28 @@ class AlarmReceiver : BroadcastReceiver() {
                 }
             }
             wakeLock?.acquire(3 * 60 * 1000L) // 3 minutes timeout safety
+        }
+
+        /**
+         * Single place that applies the user's choice from any surface (notification button,
+         * lock-screen AlarmActivity, or the React Native UI).
+         *  - Done:    stop now, cancel remaining bursts + snooze, queue next cycle if repeating
+         *  - Snooze:  stop now, cancel remaining bursts, ring once more in [snoozeMinutes] (user setting)
+         *  - Dismiss: stop now only; remaining bursts / next cycle stay scheduled
+         */
+        fun handleUserAction(context: Context, action: String, id: String, snoozeMinutes: Int = AlarmSettings.get(context).snoozeMinutes) {
+            context.stopService(Intent(context, AlarmService::class.java))
+            releaseWakeLock()
+            if (id.isEmpty()) return
+
+            AlarmNotifier.cancelPending(context, id)
+            AlarmActivity.closeFor(id)
+
+            when (action) {
+                ACTION_DONE -> AlarmScheduler.dismissOccurrence(context, id)
+                ACTION_SNOOZE -> AlarmScheduler.snoozeAlarm(context, id, snoozeMinutes)
+                ACTION_DISMISS -> Log.d(TAG, "Dismissed current ring of $id; remaining schedule kept")
+            }
         }
 
         @Synchronized
@@ -89,36 +112,10 @@ class AlarmReceiver : BroadcastReceiver() {
                 }
             }
 
-            ACTION_DISMISS -> {
+            ACTION_DONE, ACTION_SNOOZE, ACTION_DISMISS -> {
                 val id = intent.getStringExtra(EXTRA_ALARM_ID) ?: ""
-                Log.d(TAG, "Dismiss action received for alarm $id")
-
-                // Stop Alarm Service
-                val serviceIntent = Intent(context, AlarmService::class.java).apply {
-                    setAction(AlarmService.ACTION_STOP)
-                }
-                context.stopService(serviceIntent)
-                releaseWakeLock()
-
-                if (id.isNotEmpty()) {
-                    AlarmScheduler.dismissOccurrence(context, id)
-                }
-            }
-
-            ACTION_SNOOZE -> {
-                val id = intent.getStringExtra(EXTRA_ALARM_ID) ?: ""
-                Log.d(TAG, "Snooze action received for alarm $id")
-
-                // Stop active ringing
-                val serviceIntent = Intent(context, AlarmService::class.java).apply {
-                    setAction(AlarmService.ACTION_STOP)
-                }
-                context.stopService(serviceIntent)
-                releaseWakeLock()
-
-                if (id.isNotEmpty()) {
-                    AlarmScheduler.snoozeAlarm(context, id, 5)
-                }
+                Log.d(TAG, "User action $action for alarm $id")
+                handleUserAction(context, action!!, id)
             }
 
             Intent.ACTION_BOOT_COMPLETED,

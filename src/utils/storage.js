@@ -31,7 +31,7 @@ export async function saveSettings(settings) {
 
 export async function loadSettings() {
   const raw = await AsyncStorage.getItem(KEYS.SETTINGS);
-  return raw ? JSON.parse(raw) : defaultSettings();
+  return { ...defaultSettings(), ...(raw ? JSON.parse(raw) : {}) };
 }
 
 export async function saveSessions(sessions) {
@@ -43,13 +43,15 @@ export async function loadSessions() {
   return raw ? JSON.parse(raw) : [];
 }
 
-function defaultSettings() {
+export function defaultSettings() {
   return {
-    voiceStyle: 'default',
-    activeMode: 'Focus',
-    escalationEnabled: true,
-    soundEnabled: true,
-    hapticsEnabled: true,
-    untilDoneEnabled: true,
+    voiceId: null,        // null = device default voice
+    rate: 0.95,
+    pitch: 1.0,
+    announcePrefix: false, // say "Reminder." before the message
+    vibrate: true,
+    snoozeMinutes: 5,
+    onboarded: false,     // first-launch permission setup finished / skipped
+    dismissedPermissionWarnings: [], // permission keys the user hid the Today warning for
   };
 }

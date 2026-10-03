@@ -261,133 +261,110 @@ object AlarmScheduler {
         }
     }
 
-    private fun computeNextTriggerTime(alarm: JSONObject, isCreation: Boolean = false): Long {
+    /**
+     * Next time this reminder should ring (strictly after now), or -1 if it never will again.
+     * Mirrored in JS by src/utils/schedule.js for display - keep the two in sync.
+     */
+    fun computeNextTriggerTime(alarm: JSONObject, isCreation: Boolean = false): Long {
         val now = System.currentTimeMillis()
         val scheduledTime = alarm.optLong("scheduledTime", 0L)
         val repeatType = alarm.optString("repeatType", "once")
 
         if (repeatType == "once") {
-            return if (scheduledTime > now) {
-                scheduledTime
-            } else if (isCreation) {
-                // If the user just created a reminder with time slightly in the past (e.g. within 60s), trigger in 3s
-                if (now - scheduledTime < 60 * 1000) now + 3000L else -1L
-            } else {
-                -1L // Do not reschedule past one-time alarms
+            return when {
+                scheduledTime > now -> scheduledTime
+                // Just created with a time a few seconds in the past (e.g. "now"): ring right away
+                isCreation && now - scheduledTime < 60 * 1000 -> now + 3000L
+                else -> -1L
             }
         }
 
-        val cal = Calendar.getInstance().apply {
+        val start = Calendar.getInstance().apply {
             timeInMillis = if (scheduledTime > 0) scheduledTime else now
-        }
-        val targetHour = cal.get(Calendar.HOUR_OF_DAY)
-        val targetMinute = cal.get(Calendar.MINUTE)
-        val targetSecond = 0
-
-        val nextCal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, targetHour)
-            set(Calendar.MINUTE, targetMinute)
-            set(Calendar.SECOND, targetSecond)
+            set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
 
-        if (repeatType == "daily") {
-            if (nextCal.timeInMillis <= now) {
-                nextCal.add(Calendar.DAY_OF_YEAR, 1)
+        if (repeatType == "daily" || repeatType == "weekend") {
+            val next = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, start.get(Calendar.HOUR_OF_DAY))
+                set(Calendar.MINUTE, start.get(Calendar.MINUTE))
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
             }
-            return nextCal.timeInMillis
+            while (next.timeInMillis <= now ||
+                (repeatType == "weekend" &&
+                    next.get(Calendar.DAY_OF_WEEK) != Calendar.SATURDAY &&
+                    next.get(Calendar.DAY_OF_WEEK) != Calendar.SUNDAY)
+            ) {
+                next.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return next.timeInMillis
         }
 
-        if (repeatType == "weekend") {
-            while (nextCal.timeInMillis <= now ||
-                   (nextCal.get(Calendar.DAY_OF_WEEK) != Calendar.SATURDAY &&
-                    nextCal.get(Calendar.DAY_OF_WEEK) != Calendar.SUNDAY)) {
-                nextCal.add(Calendar.DAY_OF_YEAR, 1)
-            }
-            return nextCal.timeInMillis
+        // custom: every N minutes / hours / days / weeks (optionally on chosen weekdays) / months / years
+        val interval = Math.max(1, alarm.optInt("repeatInterval", 1))
+        val unit = alarm.optString("repeatUnit", "hours")
+        val days = mutableSetOf<Int>()
+        alarm.optJSONArray("daysOfWeek")?.let { arr ->
+            for (i in 0 until arr.length()) days.add(arr.optInt(i))
         }
 
-        if (repeatType == "custom") {
-            val repeatInterval = Math.max(1, alarm.optInt("repeatInterval", 1))
-            val repeatUnit = alarm.optString("repeatUnit", "hours")
-            val daysArray = alarm.optJSONArray("daysOfWeek")
-            val daysList = mutableListOf<Int>()
-            if (daysArray != null) {
-                for (i in 0 until daysArray.length()) {
-                    daysList.add(daysArray.optInt(i))
-                }
-            }
-
-            val customCal = Calendar.getInstance().apply {
-                timeInMillis = if (scheduledTime > 0) scheduledTime else now
-            }
-
-            // If scheduledTime is in future:
-            if (customCal.timeInMillis > now) {
-                if (repeatUnit == "weeks" && daysList.isNotEmpty()) {
-                    while (customCal.timeInMillis <= now || !daysList.contains(customCal.get(Calendar.DAY_OF_WEEK))) {
-                        customCal.add(Calendar.DAY_OF_YEAR, 1)
-                    }
-                }
-                return customCal.timeInMillis
-            }
-
-            // scheduledTime is in the past: advance forward by repeatInterval until in the future
-            when (repeatUnit) {
-                "minutes" -> {
-                    val stepMs = repeatInterval * 60 * 1000L
-                    val diff = now - customCal.timeInMillis
-                    val steps = (diff / stepMs) + 1
-                    return customCal.timeInMillis + (steps * stepMs)
-                }
-                "hours" -> {
-                    val stepMs = repeatInterval * 60 * 60 * 1000L
-                    val diff = now - customCal.timeInMillis
-                    val steps = (diff / stepMs) + 1
-                    return customCal.timeInMillis + (steps * stepMs)
-                }
-                "days" -> {
-                    while (customCal.timeInMillis <= now) {
-                        customCal.add(Calendar.DAY_OF_YEAR, repeatInterval)
-                    }
-                    return customCal.timeInMillis
-                }
-                "weeks" -> {
-                    if (daysList.isNotEmpty()) {
-                        while (customCal.timeInMillis <= now || !daysList.contains(customCal.get(Calendar.DAY_OF_WEEK))) {
-                            customCal.add(Calendar.DAY_OF_YEAR, 1)
-                        }
-                    } else {
-                        while (customCal.timeInMillis <= now) {
-                            customCal.add(Calendar.WEEK_OF_YEAR, repeatInterval)
-                        }
-                    }
-                    return customCal.timeInMillis
-                }
-                "months" -> {
-                    while (customCal.timeInMillis <= now) {
-                        customCal.add(Calendar.MONTH, repeatInterval)
-                    }
-                    return customCal.timeInMillis
-                }
-                "years" -> {
-                    while (customCal.timeInMillis <= now) {
-                        customCal.add(Calendar.YEAR, repeatInterval)
-                    }
-                    return customCal.timeInMillis
-                }
-                else -> {
-                    while (customCal.timeInMillis <= now) {
-                        customCal.add(Calendar.DAY_OF_YEAR, repeatInterval)
-                    }
-                    return customCal.timeInMillis
-                }
-            }
+        if (unit == "minutes" || unit == "hours") {
+            if (start.timeInMillis > now) return start.timeInMillis
+            val stepMs = interval * (if (unit == "minutes") 60_000L else 3_600_000L)
+            val steps = (now - start.timeInMillis) / stepMs + 1
+            return start.timeInMillis + steps * stepMs
         }
 
-        if (nextCal.timeInMillis <= now) {
-            nextCal.add(Calendar.DAY_OF_YEAR, 1)
+        if (unit == "weeks" && days.isNotEmpty()) {
+            // Ring on each chosen weekday, in weeks that are a multiple of `interval` from the start week
+            val startWeek = weekStart(start)
+            val cand = Calendar.getInstance().apply {
+                timeInMillis = Math.max(start.timeInMillis, now)
+                set(Calendar.HOUR_OF_DAY, start.get(Calendar.HOUR_OF_DAY))
+                set(Calendar.MINUTE, start.get(Calendar.MINUTE))
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            repeat(7 * interval + 14) {
+                val weeksFromStart = Math.round((weekStart(cand) - startWeek) / (7 * 86_400_000.0)).toInt()
+                if (cand.timeInMillis > now && cand.timeInMillis >= start.timeInMillis &&
+                    days.contains(cand.get(Calendar.DAY_OF_WEEK)) && weeksFromStart % interval == 0
+                ) {
+                    return cand.timeInMillis
+                }
+                cand.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return -1L
         }
-        return nextCal.timeInMillis
+
+        if (start.timeInMillis > now) return start.timeInMillis
+
+        // Calendar units: always offset from the original start so month-ends / leap days don't drift
+        val (field, perStep, maxStepMs) = when (unit) {
+            "days" -> Triple(Calendar.DAY_OF_YEAR, interval, 25 * 3_600_000L)
+            "weeks" -> Triple(Calendar.DAY_OF_YEAR, 7 * interval, 7 * 25 * 3_600_000L)
+            "months" -> Triple(Calendar.MONTH, interval, 31 * 86_400_000L)
+            "years" -> Triple(Calendar.YEAR, interval, 366 * 86_400_000L)
+            else -> Triple(Calendar.DAY_OF_YEAR, interval, 25 * 3_600_000L)
+        }
+        // Lower-bound estimate of elapsed steps (maxStepMs is the longest a single unit can be), then walk forward
+        var n = ((now - start.timeInMillis) / (maxStepMs * interval)).toInt()
+        while (true) {
+            val c = (start.clone() as Calendar).apply { add(field, n * perStep) }
+            if (c.timeInMillis > now) return c.timeInMillis
+            n++
+        }
+    }
+
+    private fun weekStart(c: Calendar): Long {
+        val w = (c.clone() as Calendar)
+        w.set(Calendar.HOUR_OF_DAY, 0)
+        w.set(Calendar.MINUTE, 0)
+        w.set(Calendar.SECOND, 0)
+        w.set(Calendar.MILLISECOND, 0)
+        w.add(Calendar.DAY_OF_YEAR, Calendar.SUNDAY - w.get(Calendar.DAY_OF_WEEK))
+        return w.timeInMillis
     }
 }

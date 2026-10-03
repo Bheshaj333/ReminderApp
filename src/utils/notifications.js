@@ -55,13 +55,14 @@ export async function requestPermissions() {
 export async function scheduleReminder(reminder) {
   const { id, text, scheduledTime, repeatType, repeatInterval, repeatUnit, escalationEnabled, repeatCount, burstInterval, daysOfWeek } = reminder;
   
-  await requestPermissions();
-
-  // On Android, use native AlarmManager as the sole authoritative exact alarm engine
+  // On Android, use native AlarmManager as the sole authoritative exact alarm engine.
+  // (Permissions are requested once at app start, not on every save.)
   if (isNativeAlarmSupported) {
     await scheduleNativeAlarm(reminder);
     return id;
   }
+
+  await requestPermissions();
 
   const count = Number(repeatCount ?? 0);
   const burst = (Number(burstInterval ?? 0) > 0) ? Number(burstInterval) : 1; 

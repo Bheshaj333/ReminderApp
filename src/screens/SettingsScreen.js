@@ -1,257 +1,156 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Switch, Pressable, StatusBar, Platform, Alert } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Switch, Pressable, StatusBar, Alert } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
 import { Colors, Radii, Shadows } from '../utils/theme';
 import { useApp } from '../store/AppContext';
-import { cancelAllReminders } from '../utils/notifications';
-import {
-  canScheduleExactAlarms,
-  requestExactAlarmPermission,
-  isIgnoringBatteryOptimizations,
-  requestIgnoreBatteryOptimizations,
-  scheduleNativeAlarm,
-  isNativeAlarmSupported,
-} from '../utils/nativeAlarm';
+import Logo from '../components/Logo';
+import { scheduleNativeAlarm, isNativeAlarmSupported } from '../utils/nativeAlarm';
+import { PERMISSIONS, usePermissions } from '../utils/permissions';
 
-const BEHAVIOR_ITEMS = [
-  { key: 'escalationEnabled', label: 'Escalating intensity', desc: 'Gets louder and more urgent if ignored', icon: 'trending-up' },
-  { key: 'untilDoneEnabled', label: '"Until done" mode', desc: 'Asks if you actually completed the task', icon: 'check-circle' },
-  { key: 'soundEnabled', label: 'Sound', desc: 'Play sound with notifications', icon: 'volume-2' },
-  { key: 'hapticsEnabled', label: 'Haptics', desc: 'Vibration feedback', icon: 'smartphone' },
-];
+const SNOOZE_OPTIONS = [5, 10, 15, 30];
 
-export default function SettingsScreen({ navigation }) {
-  const { state, updateSettings } = useApp();
-  const { settings } = state;
+export default function SettingsScreen() {
+  const { state, updateSettings, pauseAll } = useApp();
+  const { settings, reminders } = state;
+  const { perms: livePerms, missing: missingList, refresh } = usePermissions();
+  const perms = livePerms || {};
+  const [testing, setTesting] = useState(false);
+  const missing = missingList.length;
 
-  const [exactAlarmAllowed, setExactAlarmAllowed] = useState(true);
-  const [ignoringBattery, setIgnoringBattery] = useState(true);
-  const [testScheduled, setTestScheduled] = useState(false);
-
-  useEffect(() => {
-    async function checkPerms() {
-      if (isNativeAlarmSupported) {
-        const exact = await canScheduleExactAlarms();
-        setExactAlarmAllowed(exact);
-        const ignoring = await isIgnoringBatteryOptimizations();
-        setIgnoringBattery(ignoring);
-      }
-    }
-    checkPerms();
-  }, []);
-
-  const toggle = (key) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    updateSettings({ [key]: !settings[key] });
-  };
-
-  const clearAll = async () => {
-    Alert.alert(
-      'Cancel All Reminders',
-      'Are you sure you want to cancel all active reminders and alarms?',
-      [
-        { text: 'No', style: 'cancel' },
-        {
-          text: 'Yes, Cancel All',
-          style: 'destructive',
-          onPress: async () => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            await cancelAllReminders();
-          },
-        },
-      ]
-    );
-  };
-
-  const handleTestAlarm = async () => {
+  const testAlarm = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setTestScheduled(true);
-
-    const testId = 'test_alarm_' + Date.now();
+    setTesting(true);
     await scheduleNativeAlarm({
-      id: testId,
-      text: 'Attention: This is a test spoken reminder. Your alarm system is working perfectly.',
-      scheduledTime: Date.now() + 5000,
+      id: 'test_alarm_' + Date.now(),
+      text: 'This is a test reminder. Your alarms are working.',
+      category: 'general',
+      scheduledTime: Date.now() + 10 * 1000,
       repeatType: 'once',
-      repeatCount: 1,
-      burstInterval: 1,
-      voiceStyle: settings.voiceStyle || 'default',
-      escalation: true,
+      repeatCount: 0,
+      burstInterval: 0,
       active: true,
     });
+    Alert.alert('Test in 10 seconds', 'Lock your phone or leave the app. It will ring and speak in 10 seconds.');
+    setTimeout(() => setTesting(false), 11 * 1000);
+  };
 
-    Alert.alert(
-      'Test Alarm Scheduled (5s)',
-      'You can now lock your screen or exit the app. In 5 seconds, the phone will automatically trigger the alarm and speak the reminder text.',
-      [{ text: 'Got it' }]
-    );
-
-    setTimeout(() => setTestScheduled(false), 7000);
+  const confirmPauseAll = () => {
+    Alert.alert('Pause all reminders?', 'Nothing will ring until you turn reminders back on.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Pause all', style: 'destructive',
+        onPress: async () => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); await pauseAll(); },
+      },
+    ]);
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" />
-      <View style={styles.nav}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Feather name="arrow-left" size={18} color={Colors.mid} />
-        </Pressable>
-        <Text style={styles.navTitle}>Settings</Text>
-        <View style={{ width: 38 }} />
-      </View>
-
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.mist} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Test Spoken Alarm Banner */}
-        <Animated.View entering={FadeInDown.delay(50).duration(400)}>
-          <View style={[styles.testCard, Shadows.sm]}>
-            <View style={styles.testCardHeader}>
-              <View style={styles.testIconWrap}>
-                <Feather name="volume-2" size={18} color={Colors.seafoam} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.testTitle}>Test Native Alarm & TTS</Text>
-                <Text style={styles.testDesc}>Trigger an alarm in 5 seconds to test background speech with screen locked</Text>
-              </View>
-            </View>
-            <Pressable
-              onPress={handleTestAlarm}
-              disabled={testScheduled}
-              style={[styles.testBtn, testScheduled && styles.testBtnActive]}
-            >
-              <Feather name={testScheduled ? 'clock' : 'play'} size={14} color={Colors.white} />
-              <Text style={styles.testBtnText}>{testScheduled ? 'Alarm Armed (5s)...' : 'Test Spoken Alarm (5s)'}</Text>
-            </Pressable>
-          </View>
+        <Animated.View entering={FadeIn.duration(300)}>
+          <Text style={styles.title}>Settings</Text>
         </Animated.View>
 
-        {/* Android Exact Alarm & Battery Permissions */}
-        {Platform.OS === 'android' && (
-          <Animated.View entering={FadeInDown.delay(100).duration(400)}>
-            <Text style={styles.sectionLabel}>Alarm Reliability & Permissions</Text>
-            <View style={[styles.card, Shadows.sm]}>
-              {/* Exact Alarms */}
-              <View style={[styles.row, styles.rowBorder]}>
-                <View style={styles.rowIco}>
-                  <Feather name="clock" size={15} color={exactAlarmAllowed ? Colors.seafoam : Colors.coralDeep} />
-                </View>
-                <View style={styles.rowInfo}>
-                  <Text style={styles.rowLabel}>Exact Alarms (Android 12+)</Text>
-                  <Text style={styles.rowDesc}>
-                    {exactAlarmAllowed ? 'Granted · Alarms fire to the exact second' : 'Permission required for exact second triggers'}
-                  </Text>
-                </View>
-                {!exactAlarmAllowed ? (
-                  <Pressable
-                    onPress={async () => {
-                      await requestExactAlarmPermission();
-                      const status = await canScheduleExactAlarms();
-                      setExactAlarmAllowed(status);
-                    }}
-                    style={styles.actionBtn}
-                  >
-                    <Text style={styles.actionBtnText}>Grant</Text>
-                  </Pressable>
-                ) : (
-                  <Feather name="check" size={18} color={Colors.seafoam} />
-                )}
-              </View>
-
-              {/* Battery Optimization */}
-              <View style={styles.row}>
-                <View style={styles.rowIco}>
-                  <Feather name="zap" size={15} color={ignoringBattery ? Colors.seafoam : Colors.warning} />
-                </View>
-                <View style={styles.rowInfo}>
-                  <Text style={styles.rowLabel}>Battery Optimization Exemption</Text>
-                  <Text style={styles.rowDesc}>
-                    {ignoringBattery ? 'Exempted · Background execution protected from Doze' : 'Prevent Android from killing alarms in deep sleep'}
-                  </Text>
-                </View>
-                {!ignoringBattery ? (
-                  <Pressable
-                    onPress={async () => {
-                      await requestIgnoreBatteryOptimizations();
-                      const status = await isIgnoringBatteryOptimizations();
-                      setIgnoringBattery(status);
-                    }}
-                    style={[styles.actionBtn, { backgroundColor: Colors.warning }]}
-                  >
-                    <Text style={styles.actionBtnText}>Exempt</Text>
-                  </Pressable>
-                ) : (
-                  <Feather name="check" size={18} color={Colors.seafoam} />
-                )}
-              </View>
+        {PERMISSIONS.length > 0 && (
+          <>
+            <View style={styles.sectionRow}>
+              <Text style={styles.section}>Reliability</Text>
+              <Text style={[styles.status, missing ? styles.statusWarn : styles.statusOk]}>
+                {missing ? `${missing} need${missing === 1 ? 's' : ''} attention` : 'All set'}
+              </Text>
             </View>
-          </Animated.View>
+            <View style={[styles.card, Shadows.sm]}>
+              {PERMISSIONS.map((p, i) => {
+                const ok = perms[p.key] !== false;
+                return (
+                  <View key={p.key} style={[styles.row, i > 0 && styles.border]}>
+                    <View style={[styles.rowIco, !ok && styles.rowIcoWarn]}>
+                      <Feather name={p.icon} size={16} color={ok ? Colors.deep : Colors.coralDeep} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle}>{p.title}</Text>
+                      <Text style={styles.rowDesc}>{ok ? p.ok : p.need}</Text>
+                    </View>
+                    {ok ? (
+                      <View style={styles.check}><Feather name="check" size={14} color={Colors.white} /></View>
+                    ) : (
+                      <Pressable onPress={async () => { await p.request(); refresh(); }} style={styles.allow} hitSlop={6}>
+                        <Text style={styles.allowText}>Allow</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          </>
         )}
 
-        {/* Behavior */}
-        <Animated.View entering={FadeInDown.delay(150).duration(400)}>
-          <Text style={styles.sectionLabel}>Behavior</Text>
-          <View style={[styles.card, Shadows.sm]}>
-            {BEHAVIOR_ITEMS.map((item, ii) => (
-              <View
-                key={item.key}
-                style={[
-                  styles.row,
-                  ii < BEHAVIOR_ITEMS.length - 1 && styles.rowBorder,
-                ]}
-              >
-                <View style={styles.rowIco}>
-                  <Feather name={item.icon} size={15} color={Colors.seafoam} />
-                </View>
-                <View style={styles.rowInfo}>
-                  <Text style={styles.rowLabel}>{item.label}</Text>
-                  <Text style={styles.rowDesc}>{item.desc}</Text>
-                </View>
-                <Switch
-                  value={!!settings[item.key]}
-                  onValueChange={() => toggle(item.key)}
-                  trackColor={{ false: Colors.sea2, true: Colors.sea3 }}
-                  thumbColor={settings[item.key] ? Colors.seafoam : Colors.soft}
-                  ios_backgroundColor={Colors.sea2}
-                  style={{ transform: [{ scaleX: 0.85 }, { scaleY: 0.85 }] }}
-                />
-              </View>
-            ))}
-          </View>
-        </Animated.View>
-
-        {/* About Card */}
-        <Animated.View entering={FadeInDown.delay(200).duration(400)}>
-          <Text style={styles.sectionLabel}>About</Text>
-          <View style={[styles.card, Shadows.sm]}>
-            <View style={styles.aboutRow}>
-              <Text style={styles.wordmark}>inter<Text style={{ color: Colors.seafoam }}>rupt</Text></Text>
-              <Text style={styles.version}>v1.0.0 (Native Alarm Engine)</Text>
+        <Text style={styles.section}>When it rings</Text>
+        <View style={[styles.card, Shadows.sm]}>
+          <View style={styles.rowCol}>
+            <Text style={styles.rowTitle}>Snooze length</Text>
+            <View style={styles.segment}>
+              {SNOOZE_OPTIONS.map(m => {
+                const sel = (settings.snoozeMinutes || 5) === m;
+                return (
+                  <Pressable key={m} onPress={() => { Haptics.selectionAsync(); updateSettings({ snoozeMinutes: m }); }} style={[styles.seg, sel && styles.segSel]}>
+                    <Text style={[styles.segText, sel && styles.segTextSel]}>{m} min</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            <Text style={styles.aboutText}>
-              Configured with Android exact AlarmManager and native Text-To-Speech engine. Reminders trigger reliably even when the device is locked or the app is terminated.
-            </Text>
           </View>
-        </Animated.View>
-
-        {/* Danger Zone */}
-        <Animated.View entering={FadeInDown.delay(250).duration(400)}>
-          <Text style={styles.sectionLabel}>Danger zone</Text>
-          <View style={[styles.card, Shadows.sm]}>
-            <Pressable style={styles.dangerRow} onPress={clearAll}>
-              <Feather name="bell-off" size={15} color={Colors.coralDeep} />
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={[styles.rowLabel, { color: Colors.coralDeep }]}>Cancel all reminders</Text>
-                <Text style={styles.rowDesc}>Removes all scheduled alarms and notifications</Text>
+          <View style={[styles.row, styles.border]}>
+            <View style={styles.rowIco}><Feather name="smartphone" size={16} color={Colors.deep} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Vibrate</Text>
+              <Text style={styles.rowDesc}>Vibrate while the reminder is speaking</Text>
+            </View>
+            <Switch
+              value={settings.vibrate !== false}
+              onValueChange={v => { Haptics.selectionAsync(); updateSettings({ vibrate: v }); }}
+              trackColor={{ false: Colors.sea2, true: Colors.seafoam }}
+              thumbColor={Colors.white}
+            />
+          </View>
+          {isNativeAlarmSupported && (
+            <Pressable onPress={testAlarm} disabled={testing} style={({ pressed }) => [styles.row, styles.border, pressed && { backgroundColor: Colors.sea }]}>
+              <View style={styles.rowIco}><Feather name="volume-2" size={16} color={Colors.deep} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{testing ? 'Test scheduled…' : 'Test alarm'}</Text>
+                <Text style={styles.rowDesc}>Rings and speaks in 10 seconds</Text>
               </View>
-              <Feather name="chevron-right" size={14} color={Colors.coral} />
+              <Feather name="chevron-right" size={18} color={Colors.soft} />
             </Pressable>
-          </View>
-        </Animated.View>
+          )}
+        </View>
 
-        <View style={{ height: 100 }} />
+        <Text style={styles.section}>Reminders</Text>
+        <View style={[styles.card, Shadows.sm]}>
+          <Pressable
+            onPress={confirmPauseAll}
+            disabled={!reminders.some(r => r.active)}
+            style={({ pressed }) => [styles.row, pressed && { backgroundColor: '#FDF1ED' }, !reminders.some(r => r.active) && { opacity: 0.45 }]}
+          >
+            <View style={[styles.rowIco, styles.rowIcoWarn]}><Feather name="pause" size={16} color={Colors.coralDeep} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.rowTitle, { color: Colors.coralDeep }]}>Pause all reminders</Text>
+              <Text style={styles.rowDesc}>Stops everything from ringing</Text>
+            </View>
+          </Pressable>
+        </View>
+
+        <View style={styles.about}>
+          <Logo size={64} tile />
+          <Text style={styles.aboutName}>ReminderApp</Text>
+          <Text style={styles.aboutText}>Reminders that speak to you. v1.0.0</Text>
+        </View>
+        <View style={{ height: 120 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -259,67 +158,30 @@ export default function SettingsScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.mist },
-  nav: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingVertical: 14,
-  },
-  backBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: Colors.white, borderWidth: 0.5, borderColor: Colors.border,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  navTitle: { fontFamily: 'Georgia', fontSize: 18, color: Colors.deeper },
-  content: { paddingHorizontal: 20, paddingTop: 6 },
-  sectionLabel: {
-    fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
-    color: Colors.soft, marginBottom: 10, marginTop: 16,
-  },
-  card: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg,
-    borderWidth: 0.5, borderColor: Colors.border, overflow: 'hidden',
-  },
-  testCard: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg,
-    padding: 16, borderWidth: 0.5, borderColor: Colors.sea3,
-    marginBottom: 8,
-  },
-  testCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
-  testIconWrap: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center',
-  },
-  testTitle: { fontSize: 15, fontWeight: '600', color: Colors.deeper },
-  testDesc: { fontSize: 12, color: Colors.mid, marginTop: 2, lineHeight: 16 },
-  testBtn: {
-    backgroundColor: Colors.seafoam, borderRadius: Radii.md,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 11,
-  },
-  testBtnActive: { backgroundColor: Colors.deep },
-  testBtnText: { color: Colors.white, fontSize: 13, fontWeight: '600', letterSpacing: 0.3 },
-  row: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 16, paddingVertical: 14,
-  },
-  rowBorder: { borderBottomWidth: 0.5, borderBottomColor: Colors.borderLight },
-  rowIco: {
-    width: 32, height: 32, borderRadius: Radii.sm,
-    backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center',
-  },
-  rowInfo: { flex: 1 },
-  rowLabel: { fontSize: 14, color: Colors.ink, fontWeight: '500' },
+  content: { paddingHorizontal: 20, paddingTop: 12 },
+  title: { fontFamily: 'Georgia', fontSize: 28, fontWeight: '600', color: Colors.deeper, marginBottom: 6 },
+  sectionRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  section: { fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase', color: Colors.mid, fontWeight: '700', marginTop: 22, marginBottom: 10 },
+  status: { fontSize: 12, fontWeight: '700' },
+  statusOk: { color: Colors.seafoamDeep },
+  statusWarn: { color: Colors.coralDeep },
+  card: { backgroundColor: Colors.white, borderRadius: 20, borderWidth: 1, borderColor: Colors.borderLight, overflow: 'hidden' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  rowCol: { paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
+  border: { borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  rowIco: { width: 36, height: 36, borderRadius: 12, backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center' },
+  rowIcoWarn: { backgroundColor: '#FDEDE8' },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: Colors.ink },
   rowDesc: { fontSize: 12, color: Colors.soft, marginTop: 2 },
-  actionBtn: {
-    backgroundColor: Colors.seafoam, borderRadius: Radii.sm,
-    paddingHorizontal: 12, paddingVertical: 6,
-  },
-  actionBtnText: { color: Colors.white, fontSize: 12, fontWeight: '600' },
-  aboutRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', padding: 16, borderBottomWidth: 0.5, borderBottomColor: Colors.borderLight },
-  wordmark: { fontFamily: 'Georgia', fontSize: 20, fontWeight: '600', color: Colors.deeper },
-  version: { fontSize: 12, color: Colors.soft },
-  aboutText: { padding: 16, fontSize: 13, color: Colors.mid, lineHeight: 20, fontStyle: 'italic', fontFamily: 'Georgia' },
-  dangerRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 14,
-  },
+  check: { width: 24, height: 24, borderRadius: 12, backgroundColor: Colors.seafoam, alignItems: 'center', justifyContent: 'center' },
+  allow: { height: 34, paddingHorizontal: 16, borderRadius: Radii.full, backgroundColor: Colors.deep, justifyContent: 'center' },
+  allowText: { color: Colors.white, fontSize: 13, fontWeight: '700' },
+  segment: { flexDirection: 'row', padding: 4, backgroundColor: Colors.sea, borderRadius: Radii.full },
+  seg: { flex: 1, height: 36, borderRadius: Radii.full, alignItems: 'center', justifyContent: 'center' },
+  segSel: { backgroundColor: Colors.white, ...Shadows.sm },
+  segText: { fontSize: 13, color: Colors.mid, fontWeight: '600' },
+  segTextSel: { color: Colors.deeper },
+  about: { alignItems: 'center', marginTop: 36, gap: 6 },
+  aboutName: { fontFamily: 'Georgia', fontSize: 18, fontWeight: '600', color: Colors.deeper, marginTop: 8 },
+  aboutText: { fontSize: 12, color: Colors.soft },
 });

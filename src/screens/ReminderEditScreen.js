@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  Pressable, Switch, StatusBar, KeyboardAvoidingView, Platform, Modal,
+  View, Text, StyleSheet, ScrollView, TextInput, Pressable, StatusBar,
+  KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -12,573 +12,384 @@ import uuid from 'react-native-uuid';
 
 import { Colors, Radii, Shadows } from '../utils/theme';
 import { useApp } from '../store/AppContext';
+import { CATEGORIES } from '../utils/categories';
+import { nextOccurrence, describeRepeat, formatWhen, DAY_LABELS } from '../utils/schedule';
+import { speak, stopSpeech } from '../utils/speech';
 import PressButton from '../components/PressButton';
 
-const MODES = ['Focus', 'Health', 'Study', 'Sleep', 'Gym'];
-const MODE_COLORS = {
-  Focus: Colors.seafoam, Health: Colors.coral, Study: Colors.petalDeep,
-  Sleep: Colors.deep, Gym: Colors.jasmineDark,
-};
-
-const DAYS = [
-  { label: 'S', val: 1 },
-  { label: 'M', val: 2 },
-  { label: 'T', val: 3 },
-  { label: 'W', val: 4 },
-  { label: 'T', val: 5 },
-  { label: 'F', val: 6 },
-  { label: 'S', val: 7 },
+const TYPES = [
+  { id: 'once', label: 'Once' },
+  { id: 'daily', label: 'Daily' },
+  { id: 'weekend', label: 'Weekends' },
+  { id: 'custom', label: 'Custom' },
 ];
-
 const UNITS = ['minutes', 'hours', 'days', 'weeks', 'months', 'years'];
+const DAY_ORDER = [2, 3, 4, 5, 6, 7, 1]; // Mon..Sun (values match java.util.Calendar)
+
+/** Next 5-minute mark at least a couple of minutes away. */
+function defaultTime() {
+  const d = new Date(Date.now() + 2 * 60 * 1000);
+  d.setSeconds(0, 0);
+  d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5);
+  return d.getTime();
+}
+
+function Stepper({ value, onChange, min, max, format }) {
+  const step = (delta) => {
+    const v = Math.min(max, Math.max(min, value + delta));
+    if (v !== value) { Haptics.selectionAsync(); onChange(v); }
+  };
+  return (
+    <View style={styles.stepper}>
+      <Pressable onPress={() => step(-1)} style={styles.stepBtn} hitSlop={6}>
+        <Feather name="minus" size={16} color={value <= min ? Colors.border : Colors.deep} />
+      </Pressable>
+      <Text style={styles.stepVal}>{format ? format(value) : value}</Text>
+      <Pressable onPress={() => step(1)} style={styles.stepBtn} hitSlop={6}>
+        <Feather name="plus" size={16} color={value >= max ? Colors.border : Colors.deep} />
+      </Pressable>
+    </View>
+  );
+}
+
+function Section({ title, children, style }) {
+  return (
+    <View style={[styles.section, style]}>
+      {title && <Text style={styles.sectionTitle}>{title}</Text>}
+      {children}
+    </View>
+  );
+}
 
 export default function ReminderEditScreen({ navigation, route }) {
-  const { addReminder, updateReminder } = useApp();
-  const editReminder = route.params?.reminder;
+  const { state, addReminder, updateReminder, deleteReminder } = useApp();
+  const editing = route.params?.reminder;
+  const needsNewTime = route.params?.needsNewTime;
 
-  const [form, setForm] = useState({
-    text: '',
-    repeatType: 'daily',
+  const [form, setForm] = useState(() => ({
+    text: route.params?.text || '',
+    category: 'general',
+    repeatType: 'once',
     repeatInterval: 1,
-    repeatUnit: 'hours',
+    repeatUnit: 'days',
     daysOfWeek: [],
     repeatCount: 0,
-    burstInterval: 0,
-    mode: 'Focus',
-    escalation: true,
-    untilDone: true,
-    scheduledTime: Date.now(),
-    active: true,
-  });
+    burstInterval: 1,
+    ...(editing || {}),
+    scheduledTime: needsNewTime || !editing?.scheduledTime ? defaultTime() : editing.scheduledTime,
+  }));
+  const [picker, setPicker] = useState(null); // 'date' | 'time' | null
+  const [speaking, setSpeaking] = useState(false);
 
-  const [showTimePicker, setShowTimePicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showUnitPicker, setShowUnitPicker] = useState(false);
-  const [intervalInput, setIntervalInput] = useState(String(form.repeatInterval));
+  const set = (patch) => setForm(f => ({ ...f, ...patch }));
+  const showDate = form.repeatType === 'once' || form.repeatType === 'custom';
+  const isPast = form.repeatType === 'once' && form.scheduledTime <= Date.now();
+  const weeklyNoDays = form.repeatType === 'custom' && form.repeatUnit === 'weeks' && form.daysOfWeek.length === 0;
 
-  useEffect(() => {
-    if (editReminder) {
-      setForm({
-        ...editReminder,
-        scheduledTime: editReminder.scheduledTime || Date.now(),
-        daysOfWeek: editReminder.daysOfWeek || [],
-        repeatCount: editReminder.repeatCount ?? 0,
-        burstInterval: editReminder.burstInterval ?? 0,
-      });
-      setIntervalInput(String(editReminder.repeatInterval || 1));
-    }
-  }, [editReminder]);
+  const summary = useMemo(() => {
+    const next = nextOccurrence({ ...form, burstInterval: Math.max(1, form.burstInterval) });
+    if (!next) return null;
+    const rings = form.repeatCount > 0
+      ? `Speaks ${form.repeatCount + 1} times, ${Math.max(1, form.burstInterval)} min apart.`
+      : 'Speaks once.';
+    const repeat = form.repeatType === 'once' ? 'One time only.' : `Then ${describeRepeat(form).toLowerCase()}.`;
+    return { next: formatWhen(next), repeat, rings };
+  }, [form]);
 
-  const handleSave = async () => {
-    if (!form.text.trim()) return;
+  const canSave = form.text.trim().length > 0 && !isPast;
+
+  const save = () => {
+    if (!canSave) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    
-    // Ensure repeatInterval is valid before saving
-    const finalInterval = parseInt(intervalInput, 10) || 1;
-    const finalForm = { ...form, repeatInterval: finalInterval };
-
-    if (editReminder) {
-      updateReminder(finalForm);
-    } else {
-      addReminder({ id: uuid.v4(), ...finalForm, createdAt: Date.now() });
-    }
-    
-    // Close screen immediately
+    stopSpeech();
+    const reminder = {
+      ...form,
+      text: form.text.trim(),
+      repeatInterval: Math.max(1, Number(form.repeatInterval) || 1),
+      burstInterval: form.repeatCount > 0 ? Math.max(1, form.burstInterval) : 0,
+      active: true, // saving a reminder means you want it to ring
+    };
     navigation.goBack();
+    if (editing) updateReminder(reminder);
+    else addReminder({ ...reminder, id: uuid.v4(), createdAt: Date.now() });
   };
 
-  const toggleDay = (day) => {
-    setForm(f => {
-      const days = f.daysOfWeek || [];
-      const newDays = days.includes(day) 
-        ? days.filter(d => d !== day) 
-        : [...days, day].sort();
-      return { ...f, daysOfWeek: newDays };
-    });
+  const remove = () => {
+    Alert.alert('Delete reminder?', form.text, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: () => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); navigation.goBack(); deleteReminder(editing.id); },
+      },
+    ]);
+  };
+
+  const preview = () => {
+    if (speaking) { stopSpeech(); setSpeaking(false); return; }
+    if (!form.text.trim()) return;
+    setSpeaking(true);
+    speak(form.text.trim(), state.settings, { onDone: () => setSpeaking(false) });
+  };
+
+  const toggleDay = (d) => {
     Haptics.selectionAsync();
+    set({ daysOfWeek: form.daysOfWeek.includes(d) ? form.daysOfWeek.filter(x => x !== d) : [...form.daysOfWeek, d].sort() });
   };
 
-  const updateInterval = (val) => {
-    const newVal = Math.max(1, val);
-    setForm(f => ({ ...f, repeatInterval: newVal }));
-    setIntervalInput(String(newVal));
+  const onPicked = (e, date) => {
+    const mode = picker;
+    setPicker(null);
+    if (!date || e.type === 'dismissed') return;
+    const d = new Date(form.scheduledTime);
+    if (mode === 'time') d.setHours(date.getHours(), date.getMinutes(), 0, 0);
+    else d.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+    set({ scheduledTime: d.getTime() });
   };
+
+  const when = new Date(form.scheduledTime);
 
   return (
-    <View style={styles.safe}>
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" />
-        
-        <View style={styles.header}>
-          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Feather name="arrow-left" size={24} color={Colors.ink} />
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.mist} />
+      <View style={styles.header}>
+        <Pressable onPress={() => { stopSpeech(); navigation.goBack(); }} style={styles.iconBtn} hitSlop={8}>
+          <Feather name="x" size={22} color={Colors.ink} />
+        </Pressable>
+        <Text style={styles.headerTitle}>{editing ? 'Edit reminder' : 'New reminder'}</Text>
+        {editing ? (
+          <Pressable onPress={remove} style={styles.iconBtn} hitSlop={8}>
+            <Feather name="trash-2" size={19} color={Colors.coralDeep} />
           </Pressable>
-          <Text style={styles.headerTitle}>{editReminder ? 'Edit Reminder' : 'New Reminder'}</Text>
-          <View style={{ width: 40 }} />
-        </View>
+        ) : <View style={styles.iconBtn} />}
+      </View>
 
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
-        >
-          <ScrollView 
-            style={styles.scroll} 
-            contentContainerStyle={styles.content}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Main Text Input - Larger and prominent */}
-            <Text style={styles.fieldLabel}>What should interrupt you?</Text>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          {needsNewTime && (
+            <View style={styles.banner}>
+              <Feather name="info" size={15} color={Colors.deep} />
+              <Text style={styles.bannerText}>That time has passed. Pick a new time to turn it back on.</Text>
+            </View>
+          )}
+
+          {/* What */}
+          <View style={[styles.textCard, Shadows.sm]}>
             <TextInput
               style={styles.textInput}
-              placeholder="E.g., Drink water, Stretch, Meditate..."
+              placeholder="What should I say? e.g. Take your vitamin D"
               placeholderTextColor={Colors.soft}
               value={form.text}
-              onChangeText={t => setForm(f => ({ ...f, text: t }))}
+              onChangeText={t => set({ text: t })}
               multiline
-              autoFocus={!editReminder}
-              blurOnSubmit={false}
+              autoFocus={!editing && !route.params?.text}
             />
-
-            <Animated.View entering={FadeIn.delay(100)}>
-              {/* Repeat Type Selection */}
-              <Text style={styles.fieldLabel}>Repeat Type</Text>
-              <View style={styles.segRow}>
-                {['once', 'daily', 'weekend', 'custom'].map(type => (
-                  <Pressable
-                    key={type}
-                    onPress={() => { 
-                      setForm(f => ({ ...f, repeatType: type })); 
-                      Haptics.selectionAsync(); 
-                    }}
-                    style={[styles.seg, form.repeatType === type && styles.segActive]}
-                  >
-                    <Text style={[styles.segText, form.repeatType === type && styles.segTextActive]}>
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {/* Date & Time Selection */}
-              <View style={styles.dateTimeRow}>
-                 <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Start Time</Text>
-                    <Pressable style={styles.timeBtn} onPress={() => setShowTimePicker(true)}>
-                      <Feather name="clock" size={14} color={Colors.mid} />
-                      <Text style={styles.timeBtnText}>
-                        {new Date(form.scheduledTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </Text>
-                    </Pressable>
-                 </View>
-                 {(form.repeatType === 'once' || form.repeatType === 'custom') && (
-                   <View style={{ flex: 1 }}>
-                      <Text style={styles.fieldLabel}>Start Date</Text>
-                      <Pressable style={styles.timeBtn} onPress={() => setShowDatePicker(true)}>
-                        <Feather name="calendar" size={14} color={Colors.mid} />
-                        <Text style={styles.timeBtnText}>
-                          {new Date(form.scheduledTime).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </Text>
-                      </Pressable>
-                   </View>
-                 )}
-              </View>
-
-              {/* Custom Recurrence Logic */}
-              {form.repeatType === 'custom' && (
-                <View style={styles.sectionCard}>
-                  <Text style={styles.fieldLabel}>Custom Recurrence</Text>
-                  <View style={{ flexDirection: 'row', gap: 10, zIndex: 10, marginBottom: 16 }}>
-                    <View style={styles.intervalBox}>
-                      <Pressable onPress={() => {
-                        const current = parseInt(intervalInput, 10) || 1;
-                        const newVal = Math.max(1, current - 1);
-                        updateInterval(newVal);
-                      }}>
-                        <Feather name="minus" size={16} color={Colors.mid} />
-                      </Pressable>
-                      <TextInput
-                        style={styles.intervalInput}
-                        value={intervalInput}
-                        onChangeText={t => {
-                          const sanitized = t.replace(/[^0-9]/g, '');
-                          setIntervalInput(sanitized);
-                          if (sanitized !== '') {
-                            const val = parseInt(sanitized, 10);
-                            setForm(f => ({ ...f, repeatInterval: val }));
-                          }
-                        }}
-                        onBlur={() => {
-                          if (intervalInput === '' || parseInt(intervalInput, 10) === 0) {
-                            updateInterval(1);
-                          }
-                        }}
-                        keyboardType="number-pad"
-                        selectTextOnFocus
-                      />
-                      <Pressable onPress={() => {
-                        const current = parseInt(intervalInput, 10) || 1;
-                        const newVal = current + 1;
-                        updateInterval(newVal);
-                      }}>
-                        <Feather name="plus" size={16} color={Colors.mid} />
-                      </Pressable>
-                    </View>
-                    
-                    <View style={{ flex: 1.5 }}>
-                      <Pressable 
-                        onPress={() => { setShowUnitPicker(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
-                        style={[styles.unitDropdown, showUnitPicker && styles.unitDropdownActive]}
-                      >
-                        <Text style={styles.unitDropdownText}>{form.repeatUnit}</Text>
-                        <Feather name="chevron-down" size={14} color={Colors.mid} />
-                      </Pressable>
-                      
-                      <Modal
-                        visible={showUnitPicker}
-                        transparent
-                        animationType="fade"
-                        onRequestClose={() => setShowUnitPicker(false)}
-                      >
-                        <Pressable 
-                          style={styles.modalBackdrop} 
-                          onPress={() => setShowUnitPicker(false)} 
-                        />
-                        <View style={styles.modalCenter}>
-                          <View style={styles.unitMenuModal}>
-                            <Text style={styles.modalTitle}>Select Unit</Text>
-                            <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
-                              {UNITS.map(u => (
-                                <Pressable
-                                  key={u}
-                                  onPress={() => { 
-                                    setForm(f => ({ ...f, repeatUnit: u })); 
-                                    setShowUnitPicker(false); 
-                                    Haptics.selectionAsync(); 
-                                  }}
-                                  style={[styles.unitItem, form.repeatUnit === u && styles.unitItemActive]}
-                                >
-                                  <Text style={[styles.unitItemText, form.repeatUnit === u && styles.unitItemTextActive]}>
-                                    {u.charAt(0).toUpperCase() + u.slice(1)}
-                                  </Text>
-                                  {form.repeatUnit === u && <Feather name="check" size={16} color={Colors.seafoam} />}
-                                </Pressable>
-                              ))}
-                            </ScrollView>
-                            <PressButton 
-                              label="Cancel" 
-                              onPress={() => setShowUnitPicker(false)} 
-                              variant="secondary" 
-                              style={{ marginTop: 16 }}
-                            />
-                          </View>
-                        </View>
-                      </Modal>
-                    </View>
-                  </View>
-
-                  {form.repeatUnit === 'weeks' && (
-                    <View>
-                      <Text style={styles.subLabel}>Repeat on</Text>
-                      <View style={styles.daysRow}>
-                        {DAYS.map(d => {
-                          const sel = (form.daysOfWeek || []).includes(d.val);
-                          return (
-                            <Pressable
-                              key={d.val}
-                              onPress={() => toggleDay(d.val)}
-                              style={[styles.dayCircle, sel && styles.dayCircleActive]}
-                            >
-                              <Text style={[styles.dayText, sel && styles.dayTextActive]}>{d.label}</Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  )}
-                </View>
-              )}
-
-              {/* Burst Settings */}
-              <View style={styles.burstContainer}>
-                 <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Repeat Count</Text>
-                    <View style={styles.stepControl}>
-                      <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.max(0, f.repeatCount - 1) }))} style={styles.stepBtn}>
-                        <Feather name="minus" size={14} color={Colors.mid} />
-                      </Pressable>
-                      <Text style={styles.stepVal}>{form.repeatCount}x</Text>
-                      <Pressable onPress={() => setForm(f => ({ ...f, repeatCount: Math.min(10, f.repeatCount + 1), burstInterval: f.burstInterval === 0 ? 1 : f.burstInterval }))} style={styles.stepBtn}>
-                        <Feather name="plus" size={14} color={Colors.mid} />
-                      </Pressable>
-                    </View>
-                 </View>
-                 <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Burst (Mins)</Text>
-                    <View style={styles.stepControl}>
-                      <Pressable onPress={() => setForm(f => ({ ...f, burstInterval: Math.max(0, f.burstInterval - 1) }))} style={styles.stepBtn}>
-                        <Feather name="minus" size={14} color={Colors.mid} />
-                      </Pressable>
-                      <Text style={styles.stepVal}>{form.burstInterval}m</Text>
-                      <Pressable onPress={() => setForm(f => ({ ...f, burstInterval: Math.min(60, f.burstInterval + 1) }))} style={styles.stepBtn}>
-                        <Feather name="plus" size={14} color={Colors.mid} />
-                      </Pressable>
-                    </View>
-                 </View>
-              </View>
-
-              {/* Mode Selection */}
-              <Text style={styles.fieldLabel}>Activity Mode</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.modeScroll}
-                contentContainerStyle={styles.modeScrollContent}
-              >
-                {MODES.map(mode => {
-                  const sel = form.mode === mode;
-                  const color = MODE_COLORS[mode];
-                  return (
-                    <Pressable
-                      key={mode}
-                      onPress={() => { setForm(f => ({ ...f, mode })); Haptics.selectionAsync(); }}
-                      style={[styles.modeChip, sel && { backgroundColor: color + '18', borderColor: color }]}
-                    >
-                      <Text style={[styles.modeText, sel && { color, fontWeight: '600' }]}>{mode}</Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-
-              {/* Switches */}
-              <View style={styles.switchesBlock}>
-                <View style={styles.toggleRow}>
-                  <View>
-                    <Text style={styles.toggleTitle}>Escalate intensity</Text>
-                    <Text style={styles.toggleDesc}>Increases volume if ignored</Text>
-                  </View>
-                  <Switch
-                    value={form.escalation}
-                    onValueChange={v => setForm(f => ({ ...f, escalation: v }))}
-                    trackColor={{ false: Colors.sea2, true: Colors.sea3 }}
-                    thumbColor={form.escalation ? Colors.seafoam : Colors.soft}
-                  />
-                </View>
-                <View style={[styles.toggleRow, { borderBottomWidth: 0 }]}>
-                  <View>
-                    <Text style={styles.toggleTitle}>Completion check</Text>
-                    <Text style={styles.toggleDesc}>Ensures task is actually done</Text>
-                  </View>
-                  <Switch
-                    value={form.untilDone}
-                    onValueChange={v => setForm(f => ({ ...f, untilDone: v }))}
-                    trackColor={{ false: Colors.sea2, true: Colors.sea3 }}
-                    thumbColor={form.untilDone ? Colors.seafoam : Colors.soft}
-                  />
-                </View>
-              </View>
-            </Animated.View>
-            
-            <View style={{ height: 40 }} />
-          </ScrollView>
-          
-          <View style={styles.footer}>
-            <PressButton
-              label={editReminder ? 'Save Changes' : 'Create Reminder'}
-              onPress={handleSave}
-              variant="primary"
-              size="lg"
-              disabled={!form.text.trim()}
-            />
+            <Pressable onPress={preview} disabled={!form.text.trim()} style={[styles.hearBtn, !form.text.trim() && { opacity: 0.4 }]}>
+              <Feather name={speaking ? 'square' : 'play'} size={13} color={Colors.deep} />
+              <Text style={styles.hearText}>{speaking ? 'Stop' : 'Hear it'}</Text>
+            </Pressable>
           </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
 
-      {showTimePicker && (
-        <DateTimePicker
-          value={new Date(form.scheduledTime)}
-          mode="time"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(e, date) => {
-            setShowTimePicker(false);
-            if (date && e.type !== 'dismissed') {
-               const current = new Date(form.scheduledTime);
-               current.setHours(date.getHours());
-               current.setMinutes(date.getMinutes());
-               current.setSeconds(0);
-               setForm(f => ({ ...f, scheduledTime: current.getTime() }));
-            }
-          }}
-        />
-      )}
+          <Section title="Category">
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.catRow}>
+              {CATEGORIES.map(c => {
+                const sel = form.category === c.id;
+                return (
+                  <Pressable
+                    key={c.id}
+                    onPress={() => { Haptics.selectionAsync(); set({ category: c.id }); }}
+                    style={[styles.cat, sel && { backgroundColor: c.color + '1C', borderColor: c.color }]}
+                  >
+                    <Text style={styles.catEmoji}>{c.emoji}</Text>
+                    <Text style={[styles.catText, sel && { color: Colors.deeper }]}>{c.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </Section>
 
-      {showDatePicker && (
-        <DateTimePicker
-          value={new Date(form.scheduledTime)}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(e, date) => {
-            setShowDatePicker(false);
-            if (date && e.type !== 'dismissed') {
-               const current = new Date(form.scheduledTime);
-               current.setFullYear(date.getFullYear());
-               current.setMonth(date.getMonth());
-               current.setDate(date.getDate());
-               setForm(f => ({ ...f, scheduledTime: current.getTime() }));
-            }
-          }}
-        />
+          <Section title="Repeat">
+            <View style={styles.segment}>
+              {TYPES.map(t => {
+                const sel = form.repeatType === t.id;
+                return (
+                  <Pressable key={t.id} onPress={() => { Haptics.selectionAsync(); set({ repeatType: t.id }); }} style={[styles.seg, sel && styles.segSel]}>
+                    <Text style={[styles.segText, sel && styles.segTextSel]}>{t.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.fieldRow}>
+              {showDate && (
+                <Pressable style={[styles.field, isPast && styles.fieldError]} onPress={() => setPicker('date')}>
+                  <Feather name="calendar" size={16} color={Colors.seafoamDeep} />
+                  <View>
+                    <Text style={styles.fieldLabel}>{form.repeatType === 'custom' ? 'Starts' : 'Date'}</Text>
+                    <Text style={styles.fieldValue}>{when.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: when.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined })}</Text>
+                  </View>
+                </Pressable>
+              )}
+              <Pressable style={[styles.field, isPast && styles.fieldError]} onPress={() => setPicker('time')}>
+                <Feather name="clock" size={16} color={Colors.seafoamDeep} />
+                <View>
+                  <Text style={styles.fieldLabel}>Time</Text>
+                  <Text style={styles.fieldValue}>{when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</Text>
+                </View>
+              </Pressable>
+            </View>
+            {isPast && <Text style={styles.error}>This time has already passed.</Text>}
+
+            {form.repeatType === 'custom' && (
+              <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(150)} layout={LinearTransition.duration(200)} style={styles.customBox}>
+                <View style={styles.everyRow}>
+                  <Text style={styles.everyLabel}>Every</Text>
+                  <Stepper value={form.repeatInterval} onChange={v => set({ repeatInterval: v })} min={1} max={99} />
+                </View>
+                <View style={styles.unitRow}>
+                  {UNITS.map(u => {
+                    const sel = form.repeatUnit === u;
+                    return (
+                      <Pressable key={u} onPress={() => { Haptics.selectionAsync(); set({ repeatUnit: u }); }} style={[styles.unit, sel && styles.unitSel]}>
+                        <Text style={[styles.unitText, sel && styles.unitTextSel]}>{u}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {form.repeatUnit === 'weeks' && (
+                  <View style={styles.daysRow}>
+                    {DAY_ORDER.map(d => {
+                      const sel = form.daysOfWeek.includes(d);
+                      return (
+                        <Pressable key={d} onPress={() => toggleDay(d)} style={[styles.day, sel && styles.daySel]}>
+                          <Text style={[styles.dayText, sel && styles.dayTextSel]}>{DAY_LABELS[d - 1].slice(0, 2)}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                )}
+                {weeklyNoDays && <Text style={styles.helper}>No days picked: repeats on the start day.</Text>}
+              </Animated.View>
+            )}
+          </Section>
+
+          <Section title="Ring again">
+            <View style={[styles.card, Shadows.sm]}>
+              <View style={styles.ringRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.ringTitle}>Extra rings</Text>
+                  <Text style={styles.ringDesc}>Say it again if you need a nudge</Text>
+                </View>
+                <Stepper value={form.repeatCount} onChange={v => set({ repeatCount: v })} min={0} max={10} format={v => (v ? `${v}×` : 'Off')} />
+              </View>
+              {form.repeatCount > 0 && (
+                <Animated.View entering={FadeIn.duration(200)} style={[styles.ringRow, styles.ringBorder]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.ringTitle}>Gap</Text>
+                    <Text style={styles.ringDesc}>Time between rings</Text>
+                  </View>
+                  <Stepper value={Math.max(1, form.burstInterval)} onChange={v => set({ burstInterval: v })} min={1} max={60} format={v => `${v} min`} />
+                </Animated.View>
+              )}
+            </View>
+          </Section>
+
+          {summary && !isPast && (
+            <View style={styles.summary}>
+              <Feather name="volume-2" size={16} color={Colors.deep} style={{ marginTop: 2 }} />
+              <Text style={styles.summaryText}>
+                <Text style={{ fontWeight: '700' }}>First ring {summary.next}.</Text> {summary.repeat} {summary.rings}
+              </Text>
+            </View>
+          )}
+          <View style={{ height: 24 }} />
+        </ScrollView>
+
+        <View style={styles.footer}>
+          <PressButton label={editing ? 'Save changes' : 'Create reminder'} onPress={save} size="lg" disabled={!canSave} />
+        </View>
+      </KeyboardAvoidingView>
+
+      {picker && (
+        <DateTimePicker value={when} mode={picker} display="default" onChange={onPicked} minimumDate={picker === 'date' && form.repeatType === 'once' ? new Date() : undefined} />
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.mist },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, backgroundColor: Colors.white,
-    borderBottomWidth: 0.5, borderBottomColor: Colors.border,
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, height: 56 },
+  iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
+  headerTitle: { fontFamily: 'Georgia', fontSize: 19, fontWeight: '600', color: Colors.deeper },
+  content: { paddingHorizontal: 20, paddingTop: 4 },
+  banner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, marginBottom: 14,
+    backgroundColor: Colors.sea, borderRadius: Radii.lg, borderWidth: 1, borderColor: Colors.sea2,
   },
-  headerTitle: { fontFamily: 'Georgia', fontSize: 18, fontWeight: '600', color: Colors.deeper },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  scroll: { flex: 1 },
-  content: { padding: 20 },
-  textInput: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg, padding: 18,
-    fontSize: 20, color: Colors.ink, marginBottom: 24, minHeight: 120,
-    textAlignVertical: 'top', borderWidth: 1, borderColor: Colors.sea3,
-    fontWeight: '300', ...Shadows.sm,
+  bannerText: { flex: 1, fontSize: 13, color: Colors.deeper, lineHeight: 18 },
+
+  textCard: { backgroundColor: Colors.white, borderRadius: 22, padding: 16, borderWidth: 1, borderColor: Colors.borderLight },
+  textInput: { fontSize: 20, lineHeight: 27, color: Colors.ink, minHeight: 84, textAlignVertical: 'top', padding: 0 },
+  hearBtn: {
+    alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10,
+    height: 32, paddingHorizontal: 12, borderRadius: Radii.full, backgroundColor: Colors.sea,
   },
-  fieldLabel: {
-    fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase',
-    color: Colors.soft, marginBottom: 10, fontWeight: '600',
+  hearText: { fontSize: 13, color: Colors.deep, fontWeight: '600' },
+
+  section: { marginTop: 24 },
+  sectionTitle: { fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase', color: Colors.mid, fontWeight: '700', marginBottom: 10 },
+  catRow: { gap: 8, paddingRight: 20 },
+  cat: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, height: 40, paddingHorizontal: 14,
+    borderRadius: Radii.full, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.borderLight,
   },
-  subLabel: { fontSize: 12, color: Colors.mid, marginBottom: 8 },
-  segRow: { flexDirection: 'row', gap: 8, marginBottom: 24 },
-  seg: {
-    flex: 1, paddingVertical: 10, borderRadius: Radii.md,
-    backgroundColor: Colors.sea, borderWidth: 0.5, borderColor: Colors.border,
-    alignItems: 'center',
+  catEmoji: { fontSize: 16 },
+  catText: { fontSize: 13, color: Colors.mid, fontWeight: '600' },
+
+  segment: { flexDirection: 'row', padding: 4, backgroundColor: Colors.sea, borderRadius: Radii.full },
+  seg: { flex: 1, height: 38, borderRadius: Radii.full, alignItems: 'center', justifyContent: 'center' },
+  segSel: { backgroundColor: Colors.white, ...Shadows.sm },
+  segText: { fontSize: 13, color: Colors.mid, fontWeight: '600' },
+  segTextSel: { color: Colors.deeper },
+
+  fieldRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  field: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
+    backgroundColor: Colors.white, borderRadius: 18, borderWidth: 1, borderColor: Colors.borderLight,
   },
-  segActive: { backgroundColor: Colors.seafoam + '20', borderColor: Colors.seafoam },
-  segText: { fontSize: 13, color: Colors.mid, fontWeight: '400' },
-  segTextActive: { color: Colors.deep, fontWeight: '600' },
-  dateTimeRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
-  timeBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: Colors.sea, borderRadius: Radii.md, padding: 14,
-    borderWidth: 0.5, borderColor: Colors.border,
+  fieldError: { borderColor: Colors.coral },
+  fieldLabel: { fontSize: 11, color: Colors.soft, fontWeight: '600' },
+  fieldValue: { fontSize: 15, color: Colors.ink, fontWeight: '600', marginTop: 1 },
+  error: { color: Colors.coralDeep, fontSize: 13, marginTop: 8, marginLeft: 4 },
+
+  customBox: { marginTop: 12, backgroundColor: Colors.white, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: Colors.borderLight },
+  everyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  everyLabel: { fontSize: 15, fontWeight: '600', color: Colors.ink },
+  unitRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  unit: { height: 34, paddingHorizontal: 14, borderRadius: Radii.full, backgroundColor: Colors.sea, justifyContent: 'center' },
+  unitSel: { backgroundColor: Colors.deep },
+  unitText: { fontSize: 13, color: Colors.mid, fontWeight: '600' },
+  unitTextSel: { color: Colors.white },
+  daysRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 },
+  day: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center' },
+  daySel: { backgroundColor: Colors.seafoamDeep },
+  dayText: { fontSize: 12, color: Colors.mid, fontWeight: '600' },
+  dayTextSel: { color: Colors.white },
+  helper: { fontSize: 12, color: Colors.soft, marginTop: 10 },
+
+  card: { backgroundColor: Colors.white, borderRadius: 20, borderWidth: 1, borderColor: Colors.borderLight },
+  ringRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
+  ringBorder: { borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  ringTitle: { fontSize: 15, fontWeight: '600', color: Colors.ink },
+  ringDesc: { fontSize: 12, color: Colors.soft, marginTop: 2 },
+  stepper: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.sea, borderRadius: Radii.full, height: 40 },
+  stepBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  stepVal: { minWidth: 52, textAlign: 'center', fontSize: 15, fontWeight: '700', color: Colors.deeper },
+
+  summary: {
+    flexDirection: 'row', gap: 10, marginTop: 20, padding: 16,
+    backgroundColor: Colors.sea, borderRadius: 18,
   },
-  timeBtnText: { fontSize: 14, color: Colors.ink, fontWeight: '500' },
-  sectionCard: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg, padding: 16,
-    marginBottom: 24, borderWidth: 0.5, borderColor: Colors.border,
-  },
-  intervalBox: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.sea, borderRadius: Radii.md, paddingHorizontal: 12, height: 46,
-  },
-  intervalInput: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.ink,
-    paddingVertical: 0,
-  },
-  intervalVal: { fontSize: 16, fontWeight: '600', color: Colors.ink },
-  unitDropdown: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.sea, borderRadius: Radii.md, paddingHorizontal: 16,
-    height: 46, borderWidth: 0.5, borderColor: Colors.border,
-  },
-  unitDropdownActive: { borderColor: Colors.seafoam },
-  unitDropdownText: { fontSize: 14, color: Colors.ink, textTransform: 'capitalize', fontWeight: '500' },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalCenter: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-  },
-  unitMenuModal: {
-    backgroundColor: Colors.white,
-    borderRadius: Radii.lg,
-    padding: 20,
-    ...Shadows.lg,
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.deeper,
-    marginBottom: 16,
-    textAlign: 'center',
-    fontFamily: 'Georgia',
-  },
-  unitItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.borderLight,
-  },
-  unitItemActive: {
-    backgroundColor: Colors.sea,
-  },
-  unitItemText: { fontSize: 14, color: Colors.mid, textTransform: 'capitalize' },
-  unitItemTextActive: { color: Colors.seafoam, fontWeight: '700' },
-  daysRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
-  dayCircle: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: Colors.sea, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 0.5, borderColor: 'transparent',
-  },
-  dayCircleActive: { backgroundColor: Colors.seafoam, borderColor: Colors.seafoam },
-  dayText: { fontSize: 12, color: Colors.mid, fontWeight: '500' },
-  dayTextActive: { color: Colors.white, fontWeight: '700' },
-  burstContainer: { flexDirection: 'row', gap: 16, marginBottom: 24 },
-  stepControl: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: Colors.sea, borderRadius: Radii.md, height: 46,
-    borderWidth: 0.5, borderColor: Colors.border, paddingHorizontal: 8,
-  },
-  stepBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  stepVal: { fontSize: 14, fontWeight: '600', color: Colors.ink },
-  modeScroll: { marginBottom: 24 },
-  modeScrollContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 4,
-    paddingRight: 10,
-  },
-  modeChip: {
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    backgroundColor: Colors.white,
-    borderRadius: Radii.full,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    ...Shadows.sm,
-  },
-  modeText: { fontSize: 13, color: Colors.mid },
-  switchesBlock: {
-    backgroundColor: Colors.white, borderRadius: Radii.lg, paddingHorizontal: 16,
-    borderWidth: 0.5, borderColor: Colors.border, marginBottom: 20,
-  },
-  toggleRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: Colors.borderLight,
-  },
-  toggleTitle: { fontSize: 14, color: Colors.ink, fontWeight: '500' },
-  toggleDesc: { fontSize: 12, color: Colors.soft, marginTop: 2 },
-  footer: {
-    padding: 20, backgroundColor: Colors.white,
-    borderTopWidth: 0.5, borderTopColor: Colors.border,
-  },
+  summaryText: { flex: 1, fontSize: 14, lineHeight: 20, color: Colors.deeper },
+  footer: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 12, backgroundColor: Colors.mist },
 });

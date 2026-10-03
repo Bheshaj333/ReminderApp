@@ -118,6 +118,28 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
     }
 
     @ReactMethod
+    fun setAlarmSettings(map: ReadableMap, promise: Promise) {
+        try {
+            val current = AlarmSettings.get(reactContext)
+            AlarmSettings.save(
+                reactContext,
+                AlarmSettings.Values(
+                    voiceId = if (map.hasKey("voiceId") && !map.isNull("voiceId")) map.getString("voiceId") else null,
+                    rate = if (map.hasKey("rate")) map.getDouble("rate").toFloat() else current.rate,
+                    pitch = if (map.hasKey("pitch")) map.getDouble("pitch").toFloat() else current.pitch,
+                    announcePrefix = if (map.hasKey("announcePrefix")) map.getBoolean("announcePrefix") else current.announcePrefix,
+                    vibrate = if (map.hasKey("vibrate")) map.getBoolean("vibrate") else current.vibrate,
+                    snoozeMinutes = if (map.hasKey("snoozeMinutes")) map.getInt("snoozeMinutes") else current.snoozeMinutes
+                )
+            )
+            promise.resolve(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving alarm settings", e)
+            promise.reject("SETTINGS_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
     fun cancelAlarm(id: String, promise: Promise) {
         try {
             AlarmScheduler.cancelAlarm(reactContext, id)
@@ -142,11 +164,8 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
     @ReactMethod
     fun stopAlarm(promise: Promise) {
         try {
-            val serviceIntent = Intent(reactContext, AlarmService::class.java).apply {
-                action = AlarmService.ACTION_STOP
-            }
-            reactContext.stopService(serviceIntent)
-            AlarmReceiver.releaseWakeLock()
+            // "Dismiss": stop this ring only, keep remaining bursts / next cycle
+            AlarmReceiver.handleUserAction(reactContext, AlarmReceiver.ACTION_DISMISS, AlarmService.currentAlarmId ?: "")
             promise.resolve(true)
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping alarm service", e)
@@ -157,14 +176,8 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
     @ReactMethod
     fun dismissAlarm(id: String, promise: Promise) {
         try {
-            // Stop current ringing, drop the remaining bursts, queue the next cycle if repeating
-            val serviceIntent = Intent(reactContext, AlarmService::class.java).apply {
-                action = AlarmService.ACTION_STOP
-            }
-            reactContext.stopService(serviceIntent)
-            AlarmReceiver.releaseWakeLock()
-
-            AlarmScheduler.dismissOccurrence(reactContext, id)
+            // "Done": stop ringing, drop the remaining bursts, queue the next cycle if repeating
+            AlarmReceiver.handleUserAction(reactContext, AlarmReceiver.ACTION_DONE, id)
             promise.resolve(true)
         } catch (e: Exception) {
             Log.e(TAG, "Error dismissing alarm", e)
@@ -175,15 +188,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
     @ReactMethod
     fun snoozeAlarm(id: String, minutes: Int, promise: Promise) {
         try {
-            // Stop current ringing
-            val serviceIntent = Intent(reactContext, AlarmService::class.java).apply {
-                action = AlarmService.ACTION_STOP
-            }
-            reactContext.stopService(serviceIntent)
-            AlarmReceiver.releaseWakeLock()
-
-            // Schedule snooze
-            AlarmScheduler.snoozeAlarm(reactContext, id, if (minutes > 0) minutes else 5)
+            AlarmReceiver.handleUserAction(reactContext, AlarmReceiver.ACTION_SNOOZE, id, if (minutes > 0) minutes else 5)
             promise.resolve(true)
         } catch (e: Exception) {
             Log.e(TAG, "Error snoozing alarm", e)
@@ -243,6 +248,61 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
             }
         } catch (e: Exception) {
             promise.reject("EXACT_ALARM_SETTINGS_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun canDrawOverlays(promise: Promise) {
+        try {
+            promise.resolve(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(reactContext) else true)
+        } catch (e: Exception) {
+            promise.resolve(true)
+        }
+    }
+
+    @ReactMethod
+    fun requestOverlayPermission(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    data = Uri.parse("package:${reactContext.packageName}")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                reactContext.startActivity(intent)
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("OVERLAY_SETTINGS_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun canUseFullScreenIntent(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                val nm = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                promise.resolve(nm?.canUseFullScreenIntent() ?: true)
+            } else {
+                promise.resolve(true)
+            }
+        } catch (e: Exception) {
+            promise.resolve(true)
+        }
+    }
+
+    @ReactMethod
+    fun requestFullScreenIntentPermission(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                    data = Uri.parse("package:${reactContext.packageName}")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                reactContext.startActivity(intent)
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("FULL_SCREEN_SETTINGS_ERROR", e.message, e)
         }
     }
 
