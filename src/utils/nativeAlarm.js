@@ -16,6 +16,14 @@ export function addAlarmTriggerListener(callback) {
 }
 
 /**
+ * Add a listener fired when the native alarm service finishes (spoken, dismissed or snoozed).
+ */
+export function addAlarmStoppedListener(callback) {
+  if (!alarmEmitter) return { remove: () => {} };
+  return alarmEmitter.addListener('onAlarmStopped', callback);
+}
+
+/**
  * Schedule a native exact alarm with speech announcement.
  */
 export async function scheduleNativeAlarm(reminder) {
@@ -79,6 +87,20 @@ export async function stopNativeAlarm() {
     return await AlarmModule.stopAlarm();
   } catch (error) {
     console.error('[NativeAlarm] stopAlarm error:', error);
+    return false;
+  }
+}
+
+/**
+ * Mark the current occurrence done: stop ringing, cancel its remaining bursts,
+ * and queue the next cycle if the reminder repeats.
+ */
+export async function dismissNativeAlarm(id) {
+  if (!isNativeAlarmSupported || !id) return false;
+  try {
+    return await AlarmModule.dismissAlarm(String(id));
+  } catch (error) {
+    console.error('[NativeAlarm] dismissAlarm error:', error);
     return false;
   }
 }

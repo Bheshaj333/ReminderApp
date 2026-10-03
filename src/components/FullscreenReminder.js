@@ -11,7 +11,7 @@ import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Radii, Shadows } from '../utils/theme';
 import PressButton from './PressButton';
 import { speak, stopSpeech } from '../utils/speech';
-import { isNativeAlarmSupported, isNativeAlarmRunning } from '../utils/nativeAlarm';
+import { isNativeAlarmSupported } from '../utils/nativeAlarm';
 
 export default function FullscreenReminder({ visible, reminder, onDone, onSnooze, onIgnore }) {
   const scale = useSharedValue(0.85);
@@ -45,35 +45,24 @@ export default function FullscreenReminder({ visible, reminder, onDone, onSnooze
 
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
-        // Check if native alarm is actively handling speech on Android
-        isNativeAlarmRunning().then(running => {
-          if (running) {
-            // Native AlarmService is speaking.
-            // Estimate speech time based on word count + 5s action window
-            const words = (reminder?.text || '').split(/\s+/).length;
-            const estimatedSpeechMs = Math.max(2000, words * 400);
-            setTimeout(() => {
-              setIsRead(true);
-            }, estimatedSpeechMs);
-
+        if (isNativeAlarmSupported) {
+          // Native AlarmService speaks the text and emits onAlarmStopped when finished,
+          // which closes this screen. Never speak here too, or the message is read twice.
+          const words = (reminder?.text || '').split(/\s+/).length;
+          const estimatedSpeechMs = Math.max(2000, words * 400);
+          timeoutRef.current = setTimeout(() => setIsRead(true), estimatedSpeechMs);
+        } else {
+          // Use JS TTS (expo-speech) and wait 5 seconds after speech completes
+          speak(reminder?.text || 'Reminder', 'default', () => {
+            setIsRead(true);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
             timeoutRef.current = setTimeout(() => {
               if (!isClosing.current && visible) {
                 onIgnore?.();
               }
-            }, estimatedSpeechMs + 5000);
-          } else {
-            // Use JS TTS (expo-speech) and wait 5 seconds after speech completes
-            speak(reminder?.text || 'Reminder', 'default', () => {
-              setIsRead(true);
-              if (timeoutRef.current) clearTimeout(timeoutRef.current);
-              timeoutRef.current = setTimeout(() => {
-                if (!isClosing.current && visible) {
-                  onIgnore?.();
-                }
-              }, 5000); // 5 seconds after message finished being read
-            });
-          }
-        });
+            }, 5000); // 5 seconds after message finished being read
+          });
+        }
       }
     } else {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);

@@ -7,6 +7,8 @@ import { speak } from '../utils/speech';
 import { 
   stopNativeAlarm, 
   snoozeNativeAlarm, 
+  dismissNativeAlarm,
+  addAlarmStoppedListener,
   getTriggeredAlarm, 
   isNativeAlarmRunning, 
   isNativeAlarmSupported,
@@ -60,6 +62,11 @@ function reducer(state, action) {
 
     case 'SET_ACTIVE_REMINDER':
       return { ...state, activeReminder: action.payload };
+
+    case 'CLEAR_ACTIVE_IF': {
+      if (state.activeReminder?.id !== action.payload) return state;
+      return { ...state, activeReminder: null };
+    }
 
     case 'DISMISS_OCCURRENCE': {
       const { reminderId, occurrenceTime } = action.payload;
@@ -186,7 +193,15 @@ export function AppProvider({ children }) {
       });
     });
 
+    // Native service finished speaking (or was stopped) -> close the alarm screen
+    const nativeStoppedSub = addAlarmStoppedListener(({ id }) => {
+      if (id) dispatch({ type: 'CLEAR_ACTIVE_IF', payload: id });
+    });
+
     return () => {
+      if (nativeStoppedSub && typeof nativeStoppedSub.remove === 'function') {
+        nativeStoppedSub.remove();
+      }
       if (notifListener && typeof notifListener.remove === 'function') {
         notifListener.remove();
       }
@@ -250,8 +265,12 @@ export function AppProvider({ children }) {
       dispatch({ type: 'DISMISS_OCCURRENCE', payload: { reminderId: id, occurrenceTime } });
     }
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
-    
-    await snoozeNativeAlarm(id, 5);
+
+    if (isNativeAlarmSupported) {
+      // Native side cancels remaining bursts and schedules a single snooze ring
+      await snoozeNativeAlarm(id, 5);
+      return;
+    }
 
     const snoozeTime = Date.now() + 5 * 60 * 1000;
     await scheduleReminder({
@@ -259,6 +278,7 @@ export function AppProvider({ children }) {
       id: `${id}_snooze`,
       repeatType: 'once',
       scheduledTime: snoozeTime,
+      repeatCount: 0,
     });
   };
 
@@ -280,8 +300,10 @@ export function AppProvider({ children }) {
 
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
     
-    // Stop native alarm ringing & TTS immediately
-    await stopNativeAlarm();
+    // Stop ringing & TTS, cancel the rest of this occurrence's bursts, queue next cycle
+    if (isNativeAlarmSupported) {
+      await dismissNativeAlarm(id);
+    }
 
     // Attempt to clear related notifications from the shade using Notifee and Expo
     try {
