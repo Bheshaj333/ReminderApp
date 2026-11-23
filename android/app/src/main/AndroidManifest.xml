@@ -19,6 +19,9 @@
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
+  <!-- Portrait lock is a preference, not a requirement: keep the app installable on devices without a portrait screen -->
+  <uses-feature android:name="android.hardware.screen.portrait" android:required="false"/>
+
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
