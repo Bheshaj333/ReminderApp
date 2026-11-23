@@ -14,3 +14,12 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Release signing (never commit: back these up somewhere safe instead)
+*.jks
+keystore.properties
+
+# JVM crash dumps / Kotlin daemon logs
+hs_err_pid*.log
+replay_pid*.log
+.kotlin/

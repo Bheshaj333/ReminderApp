@@ -1,4 +1,4 @@
-package com.bheshaj.ReminderApp
+package com.matilabs.talkingreminder
 
 import android.app.AlarmManager
 import android.content.Context
@@ -140,6 +140,15 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
     }
 
     @ReactMethod
+    fun isAlarmScheduled(id: String, promise: Promise) {
+        try {
+            promise.resolve(AlarmScheduler.isScheduled(reactContext, id))
+        } catch (e: Exception) {
+            promise.resolve(true)
+        }
+    }
+
+    @ReactMethod
     fun cancelAlarm(id: String, promise: Promise) {
         try {
             AlarmScheduler.cancelAlarm(reactContext, id)
@@ -197,11 +206,6 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
     }
 
     @ReactMethod
-    fun isAlarmRunning(promise: Promise) {
-        promise.resolve(AlarmService.isRunning)
-    }
-
-    @ReactMethod
     fun getTriggeredAlarm(promise: Promise) {
         try {
             if (AlarmService.isRunning && AlarmService.currentAlarmId != null) {
@@ -248,6 +252,15 @@ class AlarmModule(private val reactContext: ReactApplicationContext) : ReactCont
             }
         } catch (e: Exception) {
             promise.reject("EXACT_ALARM_SETTINGS_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun areNotificationsEnabled(promise: Promise) {
+        try {
+            promise.resolve(androidx.core.app.NotificationManagerCompat.from(reactContext).areNotificationsEnabled())
+        } catch (e: Exception) {
+            promise.resolve(true)
         }
     }
 

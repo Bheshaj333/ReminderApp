@@ -1,4 +1,4 @@
-package com.bheshaj.ReminderApp
+package com.matilabs.talkingreminder
 
 import android.app.KeyguardManager
 import android.app.Notification
@@ -34,7 +34,7 @@ class AlarmService : Service(), TextToSpeech.OnInitListener {
         const val TAG = "AlarmService"
         const val CHANNEL_ID = "spoken_alarm_channel"
         const val NOTIFICATION_ID = 99991
-        const val ACTION_STOP = "com.bheshaj.ReminderApp.ACTION_STOP_SERVICE"
+        const val ACTION_STOP = "com.matilabs.talkingreminder.ACTION_STOP_SERVICE"
 
         var isRunning = false
             private set

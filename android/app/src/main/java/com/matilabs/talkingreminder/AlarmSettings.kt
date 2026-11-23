@@ -1,4 +1,4 @@
-package com.bheshaj.ReminderApp
+package com.matilabs.talkingreminder
 
 import android.content.Context
 

@@ -1,4 +1,4 @@
-package com.bheshaj.ReminderApp
+package com.matilabs.talkingreminder
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

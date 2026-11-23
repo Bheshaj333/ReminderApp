@@ -13,7 +13,7 @@ import { PERMISSIONS, usePermissions } from '../utils/permissions';
 
 const SNOOZE_OPTIONS = [5, 10, 15, 30];
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ navigation }) {
   const { state, updateSettings, pauseAll } = useApp();
   const { settings, reminders } = state;
   const { perms: livePerms, missing: missingList, refresh } = usePermissions();
@@ -145,10 +145,22 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
+        <Text style={styles.section}>About</Text>
+        <View style={[styles.card, Shadows.sm]}>
+          <Pressable onPress={() => navigation.navigate('Privacy')} style={({ pressed }) => [styles.row, pressed && { backgroundColor: Colors.sea }]}>
+            <View style={styles.rowIco}><Feather name="shield" size={16} color={Colors.deep} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Privacy policy</Text>
+              <Text style={styles.rowDesc}>No accounts, no tracking. Your data stays on your phone.</Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.soft} />
+          </Pressable>
+        </View>
+
         <View style={styles.about}>
           <Logo size={64} tile />
-          <Text style={styles.aboutName}>ReminderApp</Text>
-          <Text style={styles.aboutText}>Reminders that speak to you. v1.0.0</Text>
+          <Text style={styles.aboutName}>Talking Reminder</Text>
+          <Text style={styles.aboutText}>Voice Alarm by Mati Labs · v1.0.0</Text>
         </View>
         <View style={{ height: 120 }} />
       </ScrollView>

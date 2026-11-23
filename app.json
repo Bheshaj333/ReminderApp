@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ReminderApp",
+    "name": "Talking Reminder",
     "slug": "ReminderApp",
     "scheme": "reminderapp",
     "version": "1.0.0",
@@ -22,7 +22,7 @@
         "backgroundColor": "#0B2421"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.bheshaj.ReminderApp",
+      "package": "com.matilabs.talkingreminder",
       "permissions": [
         "SCHEDULE_EXACT_ALARM",
         "USE_EXACT_ALARM",
@@ -38,13 +38,6 @@
       ]
     },
     "plugins": [
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/adaptive-icon.png",
-          "color": "#78BDAF"
-        }
-      ],
       "@react-native-community/datetimepicker"
     ],
     "web": {

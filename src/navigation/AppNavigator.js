@@ -14,6 +14,7 @@ import VoiceScreen from '../screens/VoiceScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ReminderEditScreen from '../screens/ReminderEditScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
+import PrivacyScreen from '../screens/PrivacyScreen';
 import FullscreenReminder from '../components/FullscreenReminder';
 import { useApp } from '../store/AppContext';
 
@@ -109,6 +110,11 @@ export default function AppNavigator() {
               close: { animation: 'spring', config: { stiffness: 900, damping: 90, mass: 2.4, overshootClamping: true } },
             },
           }}
+        />
+        <Stack.Screen
+          name="Privacy"
+          component={PrivacyScreen}
+          options={{ cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS }}
         />
       </Stack.Navigator>
 

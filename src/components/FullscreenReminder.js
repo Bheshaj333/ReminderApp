@@ -8,8 +8,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 
 import { getCategory } from '../utils/categories';
-import { speak, stopSpeech } from '../utils/speech';
-import { isNativeAlarmSupported } from '../utils/nativeAlarm';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -51,21 +49,13 @@ export default function FullscreenReminder({ visible, reminder, settings, onDone
   useEffect(() => {
     if (!visible) return;
     closing.current = false;
+    // The native AlarmService speaks; this screen just offers the choices
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    // Android: the native service speaks. Elsewhere speak here, then close after 5s.
-    if (!isNativeAlarmSupported) {
-      let timer;
-      speak(reminder?.text || 'Reminder', settings, {
-        onDone: () => { timer = setTimeout(() => !closing.current && onIgnore?.(), 5000); },
-      });
-      return () => { clearTimeout(timer); stopSpeech(); };
-    }
   }, [visible, reminder?.id, burstIndex]);
 
   const act = (fn) => () => {
     if (closing.current) return;
     closing.current = true;
-    stopSpeech();
     fn?.();
   };
 

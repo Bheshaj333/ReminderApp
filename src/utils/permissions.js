@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AppState, Linking, Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import { AppState, Linking, Platform, PermissionsAndroid } from 'react-native';
 import {
+  areNotificationsEnabled,
   canScheduleExactAlarms, requestExactAlarmPermission,
   canUseFullScreenIntent, requestFullScreenIntentPermission,
   canDrawOverlays, requestOverlayPermission,
@@ -9,23 +9,14 @@ import {
   isNativeAlarmSupported,
 } from './nativeAlarm';
 
-async function notificationsGranted() {
-  const { status } = await Notifications.getPermissionsAsync();
-  return status === 'granted';
-}
-
 async function requestNotifications() {
-  const { status, canAskAgain } = await Notifications.getPermissionsAsync();
-  if (status === 'granted') return;
-  if (Platform.OS === 'android') {
-    // Android 13+ shows the prompt reliably only once a channel exists
-    await Notifications.setNotificationChannelAsync('reminders', {
-      name: 'Reminders',
-      importance: Notifications.AndroidImportance.HIGH,
-    }).catch(() => {});
+  if (await areNotificationsEnabled()) return;
+  // Android 13+ has a runtime prompt; once denied for good (or on older Android) only settings can fix it
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
+    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+    if (result !== PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) return;
   }
-  if (canAskAgain) await Notifications.requestPermissionsAsync();
-  else Linking.openSettings(); // permanently denied: only the app settings page can fix it
+  Linking.openSettings();
 }
 
 /** Everything the app needs to ring reliably, in the order it is asked for on first launch. */
@@ -34,7 +25,7 @@ export const PERMISSIONS = [
     key: 'notifications', icon: 'bell', title: 'Notifications',
     ok: 'Reminders can alert you', need: 'Needed to show reminders at all',
     why: 'So reminders can appear with Done, Snooze and Dismiss.',
-    check: notificationsGranted, request: requestNotifications,
+    check: areNotificationsEnabled, request: requestNotifications,
   },
   {
     key: 'exact', icon: 'clock', title: 'Exact alarms',
@@ -63,7 +54,7 @@ export const PERMISSIONS = [
 ].filter(p => isNativeAlarmSupported || p.key === 'notifications');
 
 /** { key: boolean } for every permission. */
-export async function checkAllPermissions() {
+async function checkAllPermissions() {
   const entries = await Promise.all(PERMISSIONS.map(async p => {
     try {
       return [p.key, await p.check()];

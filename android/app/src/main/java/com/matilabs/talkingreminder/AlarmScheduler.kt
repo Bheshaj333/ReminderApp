@@ -1,4 +1,4 @@
-package com.bheshaj.ReminderApp
+package com.matilabs.talkingreminder
 
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -170,6 +170,18 @@ object AlarmScheduler {
             alarmManager.cancel(snoozePendingIntent)
             snoozePendingIntent.cancel()
         }
+    }
+
+    /** True if Android still holds any pending ring (main, burst or snooze) for this reminder. */
+    fun isScheduled(context: Context, id: String): Boolean {
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_NO_CREATE
+        }
+        val intent = Intent(context, AlarmReceiver::class.java).apply { action = AlarmReceiver.ACTION_TRIGGER_ALARM }
+        val codes = (0..10).map { (id + "_" + it).hashCode() } + (id + "_snooze").hashCode()
+        return codes.any { PendingIntent.getBroadcast(context, it, intent, flags) != null }
     }
 
     fun cancelAlarm(context: Context, id: String) {

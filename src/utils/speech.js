@@ -46,7 +46,7 @@ const REGION_NAMES = {
   ES: 'Spain', MX: 'Mexico', FR: 'France', DE: 'Germany', BR: 'Brazil', PT: 'Portugal',
 };
 
-export function languageName(tag = '') {
+function languageName(tag = '') {
   const [lang, region] = tag.replace('_', '-').split('-');
   const name = LANGUAGE_NAMES[lang?.toLowerCase()] || lang || 'Other';
   const reg = region && (REGION_NAMES[region.toUpperCase()] || region.toUpperCase());

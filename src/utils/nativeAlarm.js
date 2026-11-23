@@ -74,6 +74,18 @@ export async function setNativeAlarmSettings(settings) {
 }
 
 /**
+ * Whether Android still has a pending ring for this reminder.
+ */
+export async function isNativeAlarmScheduled(id) {
+  if (!isNativeAlarmSupported) return true;
+  try {
+    return await AlarmModule.isAlarmScheduled(String(id));
+  } catch (error) {
+    return true;
+  }
+}
+
+/**
  * Cancel a scheduled native alarm by ID.
  */
 export async function cancelNativeAlarm(id) {
@@ -140,18 +152,6 @@ export async function snoozeNativeAlarm(id, minutes = 5) {
 }
 
 /**
- * Check if an alarm is currently actively ringing.
- */
-export async function isNativeAlarmRunning() {
-  if (!isNativeAlarmSupported) return false;
-  try {
-    return await AlarmModule.isAlarmRunning();
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
  * Retrieve the alarm info that triggered the app launch (if any).
  */
 export async function getTriggeredAlarm() {
@@ -185,6 +185,18 @@ export async function requestExactAlarmPermission() {
   } catch (error) {
     console.error('[NativeAlarm] requestExactAlarmPermission error:', error);
     return false;
+  }
+}
+
+/**
+ * Whether the user allows this app's notifications (any Android version).
+ */
+export async function areNotificationsEnabled() {
+  if (!isNativeAlarmSupported) return true;
+  try {
+    return await AlarmModule.areNotificationsEnabled();
+  } catch (error) {
+    return true;
   }
 }
 

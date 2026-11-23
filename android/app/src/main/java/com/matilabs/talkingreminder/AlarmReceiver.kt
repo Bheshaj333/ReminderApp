@@ -1,4 +1,4 @@
-package com.bheshaj.ReminderApp
+package com.matilabs.talkingreminder
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -10,10 +10,10 @@ import androidx.core.content.ContextCompat
 class AlarmReceiver : BroadcastReceiver() {
     companion object {
         const val TAG = "AlarmReceiver"
-        const val ACTION_TRIGGER_ALARM = "com.bheshaj.ReminderApp.ALARM_TRIGGER"
-        const val ACTION_DONE = "com.bheshaj.ReminderApp.ACTION_DONE"
-        const val ACTION_DISMISS = "com.bheshaj.ReminderApp.ACTION_DISMISS"
-        const val ACTION_SNOOZE = "com.bheshaj.ReminderApp.ACTION_SNOOZE"
+        const val ACTION_TRIGGER_ALARM = "com.matilabs.talkingreminder.ALARM_TRIGGER"
+        const val ACTION_DONE = "com.matilabs.talkingreminder.ACTION_DONE"
+        const val ACTION_DISMISS = "com.matilabs.talkingreminder.ACTION_DISMISS"
+        const val ACTION_SNOOZE = "com.matilabs.talkingreminder.ACTION_SNOOZE"
 
         const val EXTRA_ALARM_ID = "extra_alarm_id"
         const val EXTRA_ALARM_TEXT = "extra_alarm_text"
@@ -32,7 +32,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
                 wakeLock = powerManager.newWakeLock(
                     PowerManager.PARTIAL_WAKE_LOCK,
-                    "ReminderApp:AlarmWakeLock"
+                    "TalkingReminder:AlarmWakeLock"
                 ).apply {
                     setReferenceCounted(false)
                 }

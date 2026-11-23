@@ -1,13 +1,11 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, useCallback } from 'react';
 import { AppState } from 'react-native';
 import { loadReminders, saveReminders, loadSettings, saveSettings, defaultSettings } from '../utils/storage';
+import { onceFinishedAt, nextOccurrence } from '../utils/schedule';
 import {
-  scheduleReminder, cancelReminder, cancelAllReminders,
-  addNotificationReceivedListener, addNotificationResponseListener,
-} from '../utils/notifications';
-import { speak } from '../utils/speech';
-import { onceFinishedAt } from '../utils/schedule';
-import {
+  scheduleNativeAlarm as scheduleReminder,
+  cancelNativeAlarm as cancelReminder,
+  cancelAllNativeAlarms as cancelAllReminders,
   stopNativeAlarm,
   snoozeNativeAlarm,
   dismissNativeAlarm,
@@ -16,6 +14,7 @@ import {
   addAlarmTriggerListener,
   addAlarmStoppedListener,
   setNativeAlarmSettings,
+  isNativeAlarmScheduled,
 } from '../utils/nativeAlarm';
 
 const AppContext = createContext(null);
@@ -70,6 +69,22 @@ function reducer(state, action) {
   }
 }
 
+/**
+ * Re-register active reminders Android no longer knows about (app restored on a new phone,
+ * reinstalled, or force-stopped). Reminders that are already pending are left untouched.
+ */
+async function resyncAlarms(reminders) {
+  if (!isNativeAlarmSupported) return;
+  const now = Date.now();
+  for (const r of reminders) {
+    if (!r.active || !nextOccurrence(r, now)) continue;
+    if (r.repeatType === 'once' && r.scheduledTime <= now + 5000) continue;
+    if (!(await isNativeAlarmScheduled(r.id))) {
+      await scheduleReminder(r);
+    }
+  }
+}
+
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
@@ -85,14 +100,16 @@ export function AppProvider({ children }) {
         const r = reminders.find(x => x.id === ringing.id);
         if (r) activeReminder = { ...r, ...ringing };
       }
+      const hydrated = expireFinishedOnce(reminders);
       dispatch({
         type: 'HYDRATE',
-        payload: { reminders: expireFinishedOnce(reminders), settings, activeReminder },
+        payload: { reminders: hydrated, settings, activeReminder },
       });
+      resyncAlarms(hydrated);
     })();
   }, []);
 
-  // Alarm events from the native engine (and the notifee fallback on other platforms)
+  // Alarm events from the native engine
   useEffect(() => {
     const showReminder = (id, extra = {}) => {
       const reminder = stateRef.current.reminders.find(r => r.id === id);
@@ -112,15 +129,6 @@ export function AppProvider({ children }) {
       dispatch({ type: 'EXPIRE_ONCE' });
     });
 
-    const fromNotification = (content) => {
-      const data = content?.data;
-      if (!data?.reminderId) return;
-      if (!isNativeAlarmSupported && content.body) speak(content.body, stateRef.current.settings);
-      showReminder(data.reminderId, { burstIndex: Number(data.burstIndex || 0) });
-    };
-    const received = addNotificationReceivedListener(n => fromNotification(n?.request?.content));
-    const response = addNotificationResponseListener(r => fromNotification(r?.notification?.request?.content));
-
     const appState = AppState.addEventListener('change', s => {
       if (s === 'active') dispatch({ type: 'EXPIRE_ONCE' });
     });
@@ -128,8 +136,6 @@ export function AppProvider({ children }) {
     return () => {
       nativeTriggered.remove();
       nativeStopped.remove();
-      received.remove();
-      response.remove();
       appState.remove();
     };
   }, []);
@@ -181,24 +187,13 @@ export function AppProvider({ children }) {
     if (reminder?.repeatType === 'once') {
       dispatch({ type: 'UPDATE_REMINDER', payload: { id: reminder.id, active: false } });
     }
-    if (isNativeAlarmSupported) await dismissNativeAlarm(reminder.id);
+    await dismissNativeAlarm(reminder.id);
   }, []);
 
   /** Snooze: ring once more after the snooze length. */
   const snoozeReminder = useCallback(async (reminder) => {
     dispatch({ type: 'SET_ACTIVE_REMINDER', payload: null });
-    const minutes = stateRef.current.settings.snoozeMinutes || 5;
-    if (isNativeAlarmSupported) {
-      await snoozeNativeAlarm(reminder.id, minutes);
-      return;
-    }
-    await scheduleReminder({
-      ...reminder,
-      id: `${reminder.id}_snooze`,
-      repeatType: 'once',
-      scheduledTime: Date.now() + minutes * 60 * 1000,
-      repeatCount: 0,
-    });
+    await snoozeNativeAlarm(reminder.id, stateRef.current.settings.snoozeMinutes || 5);
   }, []);
 
   /** Dismiss: stop this ring only; remaining rings / next date stay. */

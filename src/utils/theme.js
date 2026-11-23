@@ -37,38 +37,6 @@ export const Colors = {
   danger: '#F4A68A',
 };
 
-export const Typography = {
-  serif: 'Georgia',
-  sans: 'System',
-  sizes: {
-    xs: 10,
-    sm: 12,
-    md: 14,
-    base: 16,
-    lg: 18,
-    xl: 22,
-    xxl: 28,
-    hero: 38,
-  },
-  weights: {
-    light: '300',
-    regular: '400',
-    medium: '500',
-    semibold: '600',
-    bold: '700',
-  },
-};
-
-export const Spacing = {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 20,
-  xxl: 28,
-  xxxl: 40,
-};
-
 export const Radii = {
   sm: 8,
   md: 12,
